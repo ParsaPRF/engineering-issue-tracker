@@ -13,7 +13,10 @@ WORKDIR /app
 RUN npm install --global pnpm@12.15.0
 
 # Copy manifests first so the dependency layer is cached independently of the source.
-COPY frontend/package.json frontend/pnpm-lock.yaml* ./
+# ``pnpm-workspace.yaml`` must be copied *before* installing: it carries the ``allowBuilds`` entry
+# for esbuild, and without it pnpm (10+) refuses to run the dependency's postinstall, leaving Vite
+# without its native binary.
+COPY frontend/package.json frontend/pnpm-lock.yaml* frontend/pnpm-workspace.yaml* ./
 RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./

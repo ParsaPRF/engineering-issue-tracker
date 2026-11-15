@@ -97,9 +97,19 @@ def transition_ticket(
         )
 
     # Re-read under a row lock: the caller's instance may be stale.
+    #
+    # ``select_related`` must NOT include a nullable relation here. ``assignee`` is nullable, so
+    # joining it produces a LEFT OUTER JOIN, and PostgreSQL rejects ``FOR UPDATE`` on the nullable
+    # side of an outer join:
+    #     NotSupportedError: FOR UPDATE cannot be applied to the nullable side of an outer join
+    # SQLite silently ignored the whole clause, so the SQLite-only test run could not catch it —
+    # this was a real production bug (every transition would have been a 500) until PostgreSQL ran
+    # the suite. ``project`` and ``reporter`` are non-nullable, so joining them keeps INNER joins and
+    # one query; ``assignee`` is loaded lazily only if something actually reads the object (the
+    # permission and guard checks use ``assignee_id`` and never trigger that query).
     locked = (
         Ticket.objects.select_for_update()
-        .select_related("project", "reporter", "assignee")
+        .select_related("project", "reporter")
         .get(pk=ticket.pk)
     )
 

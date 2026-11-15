@@ -160,9 +160,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Reads "packageManager" from package.json, so CI uses the exact pnpm the lockfile was
-      # produced with. A mismatched major version can reject the lockfile.
+      # Reads ``packageManager`` when ``version`` is omitted, but only from the repository root — and our
+      # package.json lives in frontend/, hence the explicit pin (it is the same version the lockfile
+      # was produced with; a mismatched major can reject the lockfile).
       - uses: pnpm/action-setup@v4
+        with:
+          version: "12.15.0"
 
       - uses: actions/setup-node@v4
         with:
@@ -194,7 +197,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate the compose file (no daemon required)
-        run: docker compose --env-file .env.example config --quiet
+        # The compose file references `env_file: .env`, so the render needs that file to exist even
+        # though nothing is started. Creating it from the example is exactly what a developer does,
+        # and it doubles as a check that the example is complete enough to boot the stack.
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
 
       - name: Build backend image
         run: docker build -f docker/backend.Dockerfile -t eng-tracker-backend:ci .
