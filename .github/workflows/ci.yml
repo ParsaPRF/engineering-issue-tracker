@@ -1,0 +1,237 @@
+# Continuous integration.
+#
+# What this workflow is *for* (and why each job exists):
+#
+#   1. `lint`          — fast failures: style, a schema that no longer generates cleanly, or a model
+#                        change without its migration. These catch most integration mistakes in
+#                        under a minute.
+#   2. `backend-tests` — the suite runs against **real PostgreSQL 17**, not SQLite. That is
+#                        deliberate: the concurrency test for ticket-key allocation is skipped on
+#                        SQLite, and a test that is never executed is indistinguishable from a
+#                        deleted one. This job is what closes that gap (see ADR-008).
+#   3. `frontend`      — TypeScript must compile and the production bundle must build.
+#   4. `docker`        — both Dockerfiles must actually build. The deployment guide claims they
+#                        work; this job is the evidence, and it catches the classic "the image needs
+#                        a file that .dockerignore excluded" failure.
+#
+# `docker compose up` is intentionally **not** run here: it needs real secrets and would test the
+# environment more than the code. The compose file is validated by `docker compose config` in a
+# step below, and the full stack is exercised by the deployment checklist.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch cancels the previous run: CI minutes are a budget.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "24"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Fast static checks
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint, schema, migrations
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements/*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements/development.txt
+
+      - name: Ruff (lint + import order)
+        run: ruff check apps common config tests
+
+      - name: No model change without its migration
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Django system checks
+        run: python manage.py check
+
+      - name: OpenAPI schema generates with zero warnings
+        run: python manage.py spectacular --fail-on-warn --file /tmp/openapi.yaml
+
+  # ---------------------------------------------------------------------------
+  # The real test suite, against PostgreSQL
+  # ---------------------------------------------------------------------------
+  backend-tests:
+    name: Backend tests (PostgreSQL 17)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: eng_tracker
+          POSTGRES_USER: eng_tracker
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Without the healthcheck the first test can race the server's startup and fail with a
+        # connection error that looks like a code bug.
+        options: >-
+          --health-cmd "pg_isready -U eng_tracker -d eng_tracker"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_ENGINE: postgres
+      POSTGRES_DB: eng_tracker
+      POSTGRES_USER: eng_tracker
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements/*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements/development.txt
+
+      - name: Verify the database backend is PostgreSQL (not the SQLite fallback)
+        run: |
+          python - <<'PY'
+          import os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.test")
+          import django
+          django.setup()
+          from django.db import connection
+          print("vendor:", connection.vendor)
+          assert connection.vendor == "postgresql", "CI must exercise PostgreSQL, not SQLite"
+          PY
+
+      - name: Test suite (includes the PostgreSQL-only concurrency test)
+        # ``pipefail`` matters: without it, piping pytest into tee would report tee's exit code and
+        # a failing suite would show up as a green job. This is the single most common way a CI
+        # pipeline lies.
+        run: |
+          set -o pipefail
+          pytest -q --no-header -ra | tee /tmp/pytest-summary.txt
+
+      - name: Fail if any test was skipped
+        # A skip in the PostgreSQL job means the concurrency guarantee was not verified — exactly the
+        # situation this job exists to prevent.
+        run: |
+          if grep -q "^SKIPPED" /tmp/pytest-summary.txt; then
+            echo "::error::Tests were skipped in the PostgreSQL job; see the summary above."
+            cat /tmp/pytest-summary.txt
+            exit 1
+          fi
+          echo "no skipped tests"
+
+  # ---------------------------------------------------------------------------
+  # Frontend build
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend build (TypeScript + Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads "packageManager" from package.json, so CI uses the exact pnpm the lockfile was
+      # produced with. A mismatched major version can reject the lockfile.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install (lockfile is authoritative)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        run: pnpm build
+
+      - name: Report bundle size
+        run: |
+          du -sh dist
+          find dist -type f \( -name '*.js' -o -name '*.css' \) -exec ls -lh {} +
+
+  # ---------------------------------------------------------------------------
+  # Container images
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the compose file (no daemon required)
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Build backend image
+        run: docker build -f docker/backend.Dockerfile -t eng-tracker-backend:ci .
+
+      - name: Build frontend image (Nginx + SPA)
+        run: docker build -f docker/frontend.Dockerfile -t eng-tracker-frontend:ci .
+
+      - name: Smoke-test the backend image's health endpoint
+        # The image starts gunicorn against a database it cannot reach, so give it a real one:
+        # this proves the entrypoint, wait-for-db loop and gunicorn wiring work together.
+        run: |
+          docker network create ci-net
+          docker run -d --name ci-db --network ci-net \
+            -e POSTGRES_DB=eng_tracker -e POSTGRES_USER=eng_tracker -e POSTGRES_PASSWORD=postgres \
+            postgres:17-alpine
+          for i in $(seq 1 30); do
+            docker exec ci-db pg_isready -U eng_tracker -d eng_tracker && break
+            sleep 2
+          done
+          docker run -d --name ci-backend --network ci-net \
+            -e DJANGO_SECRET_KEY=ci-only-secret-key-that-is-long-enough-123456 \
+            -e DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost \
+            -e DJANGO_CSRF_TRUSTED_ORIGINS=http://127.0.0.1:8080 \
+            -e POSTGRES_DB=eng_tracker -e POSTGRES_USER=eng_tracker -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_HOST=ci-db -e ENABLE_MIGRATIONS=1 \
+            eng-tracker-backend:ci \
+            gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 1
+          for i in $(seq 1 45); do
+            if docker exec ci-backend curl -fsS http://127.0.0.1:8000/health/ > /tmp/health.json 2>/dev/null; then
+              cat /tmp/health.json; echo; docker logs ci-backend | tail -5; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::backend container never became healthy"
+          docker logs ci-backend
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ci-backend ci-db || true; docker network rm ci-net || true

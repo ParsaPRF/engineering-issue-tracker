@@ -7,12 +7,14 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 
-# Corepack ships with Node and provides the exact pnpm version declared in package.json.
-RUN corepack enable
+# Install the exact pnpm the lockfile was produced with. `npm install -g` is used instead of
+# `corepack enable` on purpose: corepack's bundled signature verification has needed occasional
+# intervention in CI images, while an explicit version is deterministic and fails loudly.
+RUN npm install --global pnpm@12.15.0
 
-# Copy manifests first so ``pnpm install`` is cached independently of the source.
+# Copy manifests first so the dependency layer is cached independently of the source.
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./
 

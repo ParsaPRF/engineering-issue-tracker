@@ -1,10 +1,13 @@
 """Test settings.
 
-Goals: the suite runs with **no external services**, is fast, and cannot touch real systems.
+Goals: the suite runs with **no external services** by default, is fast, and cannot touch real
+systems — while still being able to run against **PostgreSQL** when the environment asks for it.
 
-* SQLite (ADR-008), using Django's default in-memory test database for speed. Behaviour that
-  needs PostgreSQL row locking (concurrency) is covered by ``@pytest.mark.postgres`` tests that
-  are skipped here — see docs/development/testing-guide.md.
+* ``DB_ENGINE=sqlite`` (default): SQLite file, no services needed (ADR-008). Tests that need
+  PostgreSQL row locking are marked ``postgres`` and skipped with a printed reason.
+* ``DB_ENGINE=postgres``: the same suite runs against a real PostgreSQL. This is what CI uses, so
+  the ``postgres``-marked tests actually execute somewhere instead of being skipped forever — a
+  skip that is never run is indistinguishable from a deleted test.
 * A fast password hasher: tests create users by the dozen and PBKDF2 would dominate runtime.
 * Celery runs eagerly (ADR-009), so task logic executes inside the test and is asserted inline.
 * Attachments are written to a throwaway directory, never to a real bucket.
@@ -14,18 +17,31 @@ import tempfile
 from pathlib import Path
 
 from .base import *  # noqa: F401,F403
-from .base import REST_FRAMEWORK
+from .base import REST_FRAMEWORK, env
 
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost", "127.0.0.1"]
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": Path(tempfile.gettempdir()) / "eng_tracker.sqlite3",
-        "OPTIONS": {"timeout": 30},
+if env("DB_ENGINE", default="sqlite").lower() == "postgres":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": env("POSTGRES_DB", default="eng_tracker"),
+            "USER": env("POSTGRES_USER", default="eng_tracker"),
+            "PASSWORD": env("POSTGRES_PASSWORD", default=""),
+            "HOST": env("POSTGRES_HOST", default="localhost"),
+            "PORT": env("POSTGRES_PORT", default="5432"),
+            "OPTIONS": {"connect_timeout": 5},
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": Path(tempfile.gettempdir()) / "eng_tracker.sqlite3",
+            "OPTIONS": {"timeout": 30},
+        }
+    }
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
