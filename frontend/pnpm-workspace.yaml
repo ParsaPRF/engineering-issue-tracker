@@ -1,0 +1,11 @@
+# pnpm 11+ reads project settings from this file rather than from .npmrc.
+#
+# Why it exists: the machine-wide ~/.npmrc sets `allow-scripts=@opencode/cli`, which denies every
+# other dependency's install script. esbuild — Vite's bundler — ships its native binary from a
+# postinstall hook, so under the machine default `pnpm install` exits 1 with
+# ERR_PNPM_IGNORED_BUILDS and the lockfile is left half-linked.
+#
+# `allowBuilds` is the pnpm 12 key (`--allow-build <pkg>` writes it here). Scoped to this package:
+# the user-level npm config is left untouched.
+allowBuilds:
+  esbuild: true

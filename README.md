@@ -104,8 +104,46 @@ eng-tracker/
 
 ## Status
 
-Implementation follows the nine phases in the project brief. Phase-by-phase verification results
-(including anything that could **not** be verified in this environment) are reported in
-[docs/development/testing-guide.md](docs/development/testing-guide.md) and in the final delivery
-report. Nothing is marked complete merely because files exist: each phase ends with executed
-commands and their real output.
+Implementation follows the nine phases in the project brief. **Nothing is marked complete merely
+because files exist** — every row below is a command that was actually executed, with its real result.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Backend test suite | `pytest apps tests -q` | **228 passed, 1 skipped** in ~6 s |
+| Skipped test | `pytest -m postgres` | The threaded ticket-key race test — needs PostgreSQL (ADR-008) |
+| Lint | `ruff check apps common config tests` | `All checks passed!` |
+| Django checks | `manage.py check` | `System check identified no issues (0 silenced).` |
+| Migrations | `manage.py makemigrations --check --dry-run` | `No changes detected` |
+| OpenAPI schema | `manage.py spectacular` | `Errors: 0`, `Warnings: 0`, 51 paths written to `docs/api/openapi.yaml` |
+| Demo data | `manage.py seed_demo` (twice) | 5 users, 1 project, 4 components, 6 tickets; second run created nothing (idempotent) |
+| HTTP smoke test | real `runserver` + cookie/CSRF session | health ok, login ok, ticket list, transitions, dashboard, audit 403 for non-admin, bad CSRF 403 |
+| Compose file | `docker compose --env-file .env.example config` | exit 0 (parsed without a Docker daemon) |
+| Frontend typecheck + build | `pnpm build` in `frontend/` | `tsc --noEmit` clean, `vite build` exit 0 — 149 modules, 540 kB JS (158 kB gzip) in 3.8 s |
+| Frontend ↔ API integration | real `runserver` + `vite` dev server | SPA shell 200, CSRF cookie via proxy, login via proxy (`HttpOnly` session), `me` + assignments + choices + transitions fetched, anonymous request → 403 |
+
+### Verified end-to-end over real HTTP (the SPA's own path)
+
+```
+1. SPA shell: HTTP 200, #root present, entry /src/main.tsx
+2. CSRF via proxy: HTTP 200, csrftoken cookie on the SPA origin
+3. Login via proxy: engineer@example.com (ENGINEER), session cookie HttpOnly=true
+4. Authenticated data: me + my-assignments(2) + choices(10 statuses, 5 priorities)
+5. Workflow: ENG-5 (IN_REVIEW) → "Request changes"  (engineers may request changes, not resolve)
+6. Vite dev transforms: main.tsx, router.tsx, TicketDetailPage.tsx, http.ts → HTTP 200
+7. Anonymous request to /auth/me/ → 403 (the signal the SPA uses to detect a dead session)
+```
+
+### Not verified in this environment (stated explicitly, not glossed over)
+
+* `docker compose up` was never executed: the development machine has the Docker CLI but no running
+  daemon (and no Docker Desktop). The compose file is validated as YAML and by `docker compose config`.
+* PostgreSQL-only behaviour (`SELECT … FOR UPDATE`, the `inet` column, concurrent key allocation) is
+  covered by a test that is **skipped** locally. It has not been executed against a real PostgreSQL.
+* Redis/MinIO paths: tests run with eager Celery and filesystem storage.
+* **Browser rendering / visual QA**: the SPA was verified as a compiled bundle and through its real
+  network path (above), but no browser session was driven by hand or by a headless runner — layout,
+  drawer behaviour and focus management at real viewport sizes are unrendered.
+
+See [docs/development/testing-guide.md](docs/development/testing-guide.md) §7 and
+[docs/development/deployment-guide.md](docs/development/deployment-guide.md) §11 for the exact list and
+how to verify each item.

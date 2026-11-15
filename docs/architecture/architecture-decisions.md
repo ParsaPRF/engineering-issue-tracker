@@ -255,3 +255,30 @@ query-cache mental model to learn; documented in the learning guide.
 browser's time zone). No RTL layout work in v1. Adding `fa` later means: add Django locales for
 backend messages, add `i18n` to the frontend, and set `dir="rtl"` on the document for that
 locale. See `docs/requirements/assumptions-and-open-questions.md`.
+
+---
+
+## ADR-016 — Define every domain model before the first migration; implement behaviour phase by phase
+
+**Context.** The delivery plan is phase-ordered (accounts ? projects ? tickets ? workflow ?
+collaboration). But the models are not independent: `AuditEvent` and `Notification` reference
+`Project` and `Ticket`; `TicketStatusHistory` references `Ticket`; `Ticket` references `Project`.
+A migration cannot be generated for an app whose foreign keys point at a model that does not exist
+yet, so a strictly phase-ordered *model* rollout would require placeholder models, dangling
+dependencies, or an artificial `AuditEvent` without project/ticket context.
+
+**Options.** (a) Strictly phase-ordered models with temporary migrations that add FKs later;
+(b) all models in one pass, behaviour phase by phase; (c) drop the cross-module foreign keys and
+store loose UUIDs.
+
+**Decision.** (b). All models and constraints were authored together and migrated once, in
+dependency order (`accounts ? projects ? tickets ? workflows ? comments ? attachments ? notifications
+? audit`). Behaviour — permissions, services, API, tests — still arrived in the documented phases.
+Option (c) was rejected: losing referential integrity for the audit and notification tables would
+trade a real guarantee for cosmetic sequencing.
+
+**Consequences.** The first commit contains more schema than any single feature needs, so the
+migration diff must be reviewed as a whole (indexes, `on_delete`, constraints). In exchange, there
+are no throwaway migrations, no half-referenced tables, and each later phase only adds behaviour.
+The phase reports therefore describe *logic* milestones, while `docs/architecture/erd.md` remains the
+authoritative schema view.

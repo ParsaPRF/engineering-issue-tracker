@@ -1,0 +1,212 @@
+/**
+ * Design tokens.
+ *
+ * Two layers: a *primitive* palette (raw hex, never used by a component) and a *semantic* layer
+ * (`--color-surface`, `--color-danger-…`) that components do use. The semantic layer is the
+ * contract: a component that references `--color-text-muted` keeps working when the ramp changes.
+ *
+ * A cool neutral ramp with blue as the accent reads as an engineering tool rather than a
+ * consumer product. Status/priority/severity each get their own ramp because the same word
+ * ("Critical") means two different things on two different axes.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Primitive: neutral ------------------------------------------------ */
+  --grey-0: #ffffff;
+  --grey-25: #fcfcfd;
+  --grey-50: #f8f9fb;
+  --grey-100: #f1f3f7;
+  --grey-200: #e4e7ee;
+  --grey-300: #d3d8e3;
+  --grey-400: #a8b0c0;
+  --grey-500: #7c869a;
+  --grey-600: #5b6478;
+  --grey-700: #3f4657;
+  --grey-800: #272c38;
+  --grey-900: #161a21;
+
+  /* ---- Primitive: accent (blue) ----------------------------------------- */
+  --blue-50: #eef4ff;
+  --blue-100: #dbe7ff;
+  --blue-200: #bcd0ff;
+  --blue-500: #2f6fed;
+  --blue-600: #1f57c9;
+  --blue-700: #1b46a1;
+
+  /* ---- Primitive: feedback ---------------------------------------------- */
+  --green-50: #e8f8ef;
+  --green-200: #a8e6c1;
+  --green-600: #1a8a4d;
+  --green-700: #146b3c;
+
+  --amber-50: #fff6e5;
+  --amber-200: #ffe0a3;
+  --amber-600: #b3750a;
+  --amber-700: #8c5c08;
+
+  --red-50: #fdeced;
+  --red-100: #fbd9dc;
+  --red-200: #f7b7bd;
+  --red-600: #c92a3a;
+  --red-700: #a01f2c;
+
+  --purple-50: #f2eeff;
+  --purple-600: #6741c9;
+
+  --teal-50: #e6f7f8;
+  --teal-600: #107c85;
+
+  --orange-50: #fff1e6;
+  --orange-600: #c9631a;
+
+  /* ---- Semantic: surfaces ------------------------------------------------ */
+  --color-canvas: var(--grey-50);
+  --color-surface: var(--grey-0);
+  --color-surface-raised: var(--grey-25);
+  --color-surface-sunken: var(--grey-100);
+  --color-surface-hover: var(--grey-50);
+  --color-sidebar: #1b2030;
+  --color-sidebar-hover: #262d41;
+  --color-sidebar-active: #313a52;
+
+  /* ---- Semantic: text ---------------------------------------------------- */
+  --color-text: var(--grey-900);
+  --color-text-secondary: var(--grey-700);
+  --color-text-muted: var(--grey-500);
+  --color-text-inverse: var(--grey-0);
+  --color-text-on-sidebar: #c7cddc;
+  --color-text-on-sidebar-strong: #ffffff;
+
+  /* ---- Semantic: lines --------------------------------------------------- */
+  --color-border: var(--grey-200);
+  --color-border-strong: var(--grey-300);
+  --color-focus: var(--blue-500);
+
+  /* ---- Semantic: accent -------------------------------------------------- */
+  --color-accent: var(--blue-500);
+  --color-accent-hover: var(--blue-600);
+  --color-accent-active: var(--blue-700);
+  --color-accent-soft: var(--blue-50);
+
+  /* ---- Semantic: feedback ------------------------------------------------ */
+  --color-danger: var(--red-600);
+  --color-danger-hover: var(--red-700);
+  --color-danger-soft: var(--red-50);
+  --color-danger-border: var(--red-200);
+  --color-success: var(--green-600);
+  --color-success-soft: var(--green-50);
+  --color-success-border: var(--green-200);
+  --color-warning: var(--amber-600);
+  --color-warning-soft: var(--amber-50);
+  --color-warning-border: var(--amber-200);
+
+  /* ---- Typography -------------------------------------------------------- */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---- Space (4px base) -------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* ---- Radius ------------------------------------------------------------ */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  /* ---- Elevation --------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(22, 26, 33, 0.05);
+  --shadow-sm: 0 1px 3px rgba(22, 26, 33, 0.08), 0 1px 2px rgba(22, 26, 33, 0.04);
+  --shadow-md: 0 4px 12px rgba(22, 26, 33, 0.08), 0 1px 3px rgba(22, 26, 33, 0.05);
+  --shadow-lg: 0 12px 32px rgba(22, 26, 33, 0.14);
+
+  /* ---- Layout ------------------------------------------------------------ */
+  --sidebar-width: 244px;
+  --topbar-height: 60px;
+  --content-max: 1440px;
+
+  /* ---- Motion ------------------------------------------------------------ */
+  --transition-fast: 120ms ease;
+  --transition-base: 180ms ease;
+}
+
+/* ---- Badge ramps -------------------------------------------------------- */
+/* Status: neutral → active → terminal. Finished states are intentionally the
+   quietest, so an open ticket draws the eye first. */
+:root {
+  --status-new-bg: var(--blue-50);
+  --status-new-fg: var(--blue-700);
+  --status-triaged-bg: var(--purple-50);
+  --status-triaged-fg: var(--purple-600);
+  --status-in-progress-bg: var(--amber-50);
+  --status-in-progress-fg: var(--amber-700);
+  --status-in-review-bg: var(--teal-50);
+  --status-in-review-fg: var(--teal-600);
+  --status-resolved-bg: var(--green-50);
+  --status-resolved-fg: var(--green-700);
+  --status-closed-bg: var(--grey-100);
+  --status-closed-fg: var(--grey-600);
+  --status-reopened-bg: var(--orange-50);
+  --status-reopened-fg: var(--orange-600);
+  --status-blocked-bg: var(--red-50);
+  --status-blocked-fg: var(--red-700);
+  --status-rejected-bg: var(--grey-100);
+  --status-rejected-fg: var(--grey-600);
+  --status-duplicate-bg: var(--grey-100);
+  --status-duplicate-fg: var(--grey-600);
+
+  /* Priority: "how soon" — cool when there is time, hot when there is not. */
+  --priority-lowest-bg: var(--grey-100);
+  --priority-lowest-fg: var(--grey-600);
+  --priority-low-bg: var(--blue-50);
+  --priority-low-fg: var(--blue-700);
+  --priority-medium-bg: var(--teal-50);
+  --priority-medium-fg: var(--teal-600);
+  --priority-high-bg: var(--orange-50);
+  --priority-high-fg: var(--orange-600);
+  --priority-critical-bg: var(--red-100);
+  --priority-critical-fg: var(--red-700);
+
+  /* Severity: "how bad" — a distinct ramp so a red badge is unambiguous
+     even when priority and severity are shown side by side. */
+  --severity-trivial-bg: var(--grey-100);
+  --severity-trivial-fg: var(--grey-600);
+  --severity-minor-bg: var(--green-50);
+  --severity-minor-fg: var(--green-700);
+  --severity-major-bg: var(--amber-50);
+  --severity-major-fg: var(--amber-700);
+  --severity-critical-bg: var(--red-100);
+  --severity-critical-fg: var(--red-700);
+  --severity-blocker-bg: #3b1220;
+  --severity-blocker-fg: #ffe3e8;
+}

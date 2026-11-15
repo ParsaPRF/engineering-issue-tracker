@@ -114,7 +114,35 @@ Errors:   0 (0 unique)
 | **Celery against a real broker** | No Redis locally; tests run eager | `docker compose up -d redis && celery -A config worker` then trigger an assignment and watch the task log |
 | **MinIO/S3 storage path** | No MinIO locally | `docker compose up -d minio minio-init` with `STORAGE_BACKEND=s3`, then upload/download an attachment |
 | **`docker compose up` end-to-end** | Docker daemon unavailable | Run it; the file passes `docker compose config` (see the deployment guide) |
-| **Frontend ↔ backend integration in a browser** | Backend was verified via the API test suite; the browser session was not exercised here | `docker compose up`, log in with a seeded account, walk the flows in §QC checklist |
+| **Browser rendering / visual QA** | No browser session was driven (headless or manual) | `pnpm dev` + backend, log in with a seeded account, walk the flows below |
+
+### Frontend verification (what *was* executed)
+
+```
+$ pnpm build                     # tsc --noEmit && vite build
+✓ 149 modules transformed        exit 0, 149 modules, ~540 kB JS (158 kB gzip)
+
+# joint smoke test with both servers running (backend :8000, vite :5173)
+1. GET /                                     → 200, #root present, entry /src/main.tsx
+2. GET /api/v1/auth/csrf/  (through proxy)   → 200, csrftoken cookie on the SPA origin
+3. POST /api/v1/auth/login/ (through proxy)  → 200, session cookie HttpOnly=true
+4. GET /api/v1/auth/me/, /tickets/my-assignments/, /tickets/choices/ → 200 with real data
+5. GET /api/v1/workflows/transitions/?ticket=… → ENG-5 (IN_REVIEW) → "Request changes"
+6. GET /src/main.tsx, /src/app/router.tsx, /src/pages/TicketDetailPage.tsx → 200 (dev transform)
+7. GET /api/v1/auth/me/ anonymously           → 403 (the SPA's "session is dead" signal)
+```
+
+Note: Vite binds `localhost` on `::1` on this machine, so the smoke test used `http://localhost:5173`;
+`http://127.0.0.1:5173` does not connect unless `server.host: '127.0.0.1'` is set.
+
+### Manual browser checklist (not executed here)
+
+1. Log in as `manager@example.com` / `Demo!Passw0rd`; confirm the dashboard totals match `seed_demo`.
+2. Open a ticket; the status buttons must match `GET /workflows/transitions/` for that user.
+3. Move a ticket that requires a comment; confirm the modal enforces it and the timeline updates.
+4. Upload a `.svg` (rejected), then a `.txt` (accepted), then download it.
+5. Log out; confirm `/tickets` redirects to `/login?next=…` and returns there after logging in.
+6. Resize to 360 px; the sidebar must become a drawer and tables must scroll, not squeeze.
 
 ### Environment observation worth recording
 
