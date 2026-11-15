@@ -1,11 +1,11 @@
 # Architecture Decision Records
 
-Format: **Context → Options → Decision → Consequences**. Only decisions that were genuinely
+Format: **Context â†’ Options â†’ Decision â†’ Consequences**. Only decisions that were genuinely
 uncertain or that constrain future work are recorded. Dates are the date of the decision.
 
 ---
 
-## ADR-001 — Modular monolith instead of microservices
+## ADR-001 â€” Modular monolith instead of microservices
 
 **Context.** The product has ~9 business capabilities with heavy cross-entity rules (a ticket
 transition touches ticket, workflow, membership, audit and notification).
@@ -22,7 +22,7 @@ Cost: boundaries are enforced by discipline and review, not by the network.
 
 ---
 
-## ADR-002 — Django 5.2 LTS on Python 3.14
+## ADR-002 â€” Django 5.2 LTS on Python 3.14
 
 **Context.** The host provides Python 3.14.2. Django 6.1.3 exists but is a fresh feature
 release.
@@ -37,7 +37,7 @@ We forgo 6.x-only features (none are needed).
 
 ---
 
-## ADR-003 — Session authentication for the browser client, not JWT in browser storage
+## ADR-003 â€” Session authentication for the browser client, not JWT in browser storage
 
 **Context.** The API is consumed by our own SPA served from the same site (Nginx in production,
 Vite proxy in development). There is no third-party or mobile client in v1.
@@ -58,12 +58,12 @@ explicit origin allow-list with credentials enabled, and `CORS_ALLOW_CREDENTIALS
 **Consequences.** No refresh tokens anywhere, so the "never store long-lived refresh tokens in
 browser storage" requirement is satisfied by construction. Cost: not suitable for non-browser
 clients; if a mobile client appears, add `djangorestframework-simplejwt` as an *additional*
-authentication class — the permission layer is unchanged because permissions depend on
+authentication class â€” the permission layer is unchanged because permissions depend on
 `request.user`, not on the token format.
 
 ---
 
-## ADR-004 — Service layer for writes, selectors for reads
+## ADR-004 â€” Service layer for writes, selectors for reads
 
 **Context.** Django invites "fat serializers" and "fat views". The workflow rules must be
 reusable from the API, Celery tasks, management commands and tests.
@@ -77,7 +77,7 @@ slightly more files and an explicit "which layer does this belong to?" question 
 
 ---
 
-## ADR-005 — Status changes only through an explicit transition operation
+## ADR-005 â€” Status changes only through an explicit transition operation
 
 **Context.** Requirements forbid clients changing status by writing an arbitrary field.
 
@@ -91,7 +91,7 @@ with an actor and timestamp. Cost: bulk status edits require looping over the tr
 
 ---
 
-## ADR-006 — UUIDv7 primary keys plus human-readable ticket keys
+## ADR-006 â€” UUIDv7 primary keys plus human-readable ticket keys
 
 **Context.** Internal identifiers must not leak volume/ordering to clients and must be safe to
 expose in URLs; humans need a short reference such as `ENG-1042`.
@@ -106,7 +106,7 @@ of scattering. Cost: 16-byte keys and slightly larger indexes than `bigint`.
 
 ---
 
-## ADR-007 — Concurrency-safe ticket key generation
+## ADR-007 â€” Concurrency-safe ticket key generation
 
 **Context.** Two requests can create tickets in the same project simultaneously; both must
 receive distinct keys, and `ENG-1042` must never be handed out twice.
@@ -128,11 +128,11 @@ receive distinct keys, and `ENG-1042` must never be handed out twice.
 
 **Consequences.** Correct on PostgreSQL (lock) *and* on SQLite (constraint + retry), so the
 rule is testable without Docker. Cost: a retry path that must stay small and a gap-tolerant
-counter (a rolled-back attempt may burn a number — acceptable, documented).
+counter (a rolled-back attempt may burn a number â€” acceptable, documented).
 
 ---
 
-## ADR-008 — PostgreSQL in production, SQLite permitted only as an explicit local fallback
+## ADR-008 â€” PostgreSQL in production, SQLite permitted only as an explicit local fallback
 
 **Context.** The target database is PostgreSQL. The current host has no PostgreSQL server and no
 running Docker daemon, so a contributor may be unable to start one.
@@ -147,9 +147,17 @@ Postgres-only behaviour (row locking, `inet` columns, partial indexes) is covere
 `@pytest.mark.postgres` and skipped when the engine is SQLite. **No claim of PostgreSQL
 verification is made unless those tests actually ran against PostgreSQL.**
 
+That gap is closed by CI (`.github/workflows/ci.yml`): the same suite runs with `DB_ENGINE=postgres`
+against a PostgreSQL 17 service, and the job **fails if any test is skipped**, so the `postgres`
+tests cannot quietly disappear. This is not theoretical — the first PostgreSQL run failed 38 tests
+with `FOR UPDATE cannot be applied to the nullable side of an outer join` in `transition_ticket()`, a
+bug that would have made every status transition return HTTP 500 in production while the SQLite suite
+stayed green. `config/settings/test.py` therefore selects the engine from `DB_ENGINE` instead of
+hard-coding SQLite.
+
 ---
 
-## ADR-009 — Celery + Redis for notifications, with idempotency in the data model
+## ADR-009 â€” Celery + Redis for notifications, with idempotency in the data model
 
 **Context.** Notification fan-out can be slow and must not fail the user's request. Retried
 tasks must not spam duplicates.
@@ -165,7 +173,7 @@ a `dedup_key` must be derived for every event type.
 
 ---
 
-## ADR-010 — Attachments are private objects served through an authorising endpoint
+## ADR-010 â€” Attachments are private objects served through an authorising endpoint
 
 **Context.** Attachments can contain customer data, logs or credentials.
 
@@ -182,15 +190,15 @@ bandwidth instead of coming straight from object storage.
 
 ---
 
-## ADR-011 — One audit mechanism, plus the workflow's own business record
+## ADR-011 â€” One audit mechanism, plus the workflow's own business record
 
 **Context.** The requirements ask for an audit trail *and* for status history, and warn against
 duplicating the same event across mechanisms.
 
 **Decision.** Two records with non-overlapping purposes:
-* `TicketStatusHistory` — a **business record**: "this ticket went NEW → TRIAGED by X, with this
+* `TicketStatusHistory` â€” a **business record**: "this ticket went NEW â†’ TRIAGED by X, with this
   comment". It is part of the workflow domain and is shown in the ticket timeline.
-* `AuditEvent` — a **compliance record**: who did what, to which object, from which IP, when,
+* `AuditEvent` â€” a **compliance record**: who did what, to which object, from which IP, when,
   covering all modules (project changes, membership changes, assignments, permission changes),
   with a single `action` vocabulary.
 
@@ -204,7 +212,7 @@ timeline stays queryable on its own. Cost: two writes per transition in the same
 
 ---
 
-## ADR-012 — Effective permission = system role × project membership
+## ADR-012 â€” Effective permission = system role Ã— project membership
 
 **Context.** "A user's access must depend on both their system role and their membership in a
 particular project."
@@ -221,7 +229,7 @@ without HTTP. Cost: services must receive the actor explicitly (no hidden `reque
 
 ---
 
-## ADR-013 — REST with path-based versioning and generated OpenAPI
+## ADR-013 â€” REST with path-based versioning and generated OpenAPI
 
 **Decision.** All endpoints under `/api/v1/`. `drf-spectacular` generates the OpenAPI 3 schema at
 `/api/schema/`, Swagger UI at `/api/docs/`, ReDoc at `/api/redoc/`. Errors use a single
@@ -232,7 +240,7 @@ Cost: versioned URL routing must be maintained.
 
 ---
 
-## ADR-014 — Frontend: React + TypeScript + Vite, feature-sliced, server state in a query cache
+## ADR-014 â€” Frontend: React + TypeScript + Vite, feature-sliced, server state in a query cache
 
 **Decision.** React with TypeScript, Vite for build/dev. Server state via TanStack Query
 (caching, refetch, optimistic-free simplicity); client/UI state local; form state via
@@ -246,7 +254,7 @@ query-cache mental model to learn; documented in the learning guide.
 
 ---
 
-## ADR-015 — Interface language and localisation
+## ADR-015 â€” Interface language and localisation
 
 **Context.** The product is described in English, the stakeholders speak Persian as well.
 
@@ -258,7 +266,7 @@ locale. See `docs/requirements/assumptions-and-open-questions.md`.
 
 ---
 
-## ADR-016 � Define every domain model before the first migration; implement behaviour phase by phase
+## ADR-016 — Define every domain model before the first migration; implement behaviour phase by phase
 
 **Context.** The delivery plan is phase-ordered (accounts ? projects ? tickets ? workflow ?
 collaboration). But the models are not independent: `AuditEvent` and `Notification` reference
@@ -273,7 +281,7 @@ store loose UUIDs.
 
 **Decision.** (b). All models and constraints were authored together and migrated once, in
 dependency order (`accounts ? projects ? tickets ? workflows ? comments ? attachments ? notifications
-? audit`). Behaviour � permissions, services, API, tests � still arrived in the documented phases.
+? audit`). Behaviour — permissions, services, API, tests — still arrived in the documented phases.
 Option (c) was rejected: losing referential integrity for the audit and notification tables would
 trade a real guarantee for cosmetic sequencing.
 

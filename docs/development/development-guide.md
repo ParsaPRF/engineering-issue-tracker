@@ -120,6 +120,15 @@ by nothing at module level.
 9. **A soft-deleted row still resolves by primary key.** Every read path that serves the row
    (`attachments.selectors.get_visible_attachment`) must filter `is_deleted=False`, not only the list
    endpoint — an actual bug the test suite caught.
+10. **`select_for_update()` cannot span a nullable join.** `select_related("assignee")` on a nullable
+   FK produces a LEFT OUTER JOIN, and PostgreSQL rejects `FOR UPDATE` there
+   (`NotSupportedError: FOR UPDATE cannot be applied to the nullable side of an outer join`). SQLite
+   ignores the clause entirely, so only a PostgreSQL run reveals it. Lock with non-nullable relations
+   only (`apps/workflows/services.py`).
+11. **Windows PowerShell writes the system code page, not UTF-8.** Appending to a Markdown file with
+   `Add-Content` or `Set-Content` (without `-Encoding utf8`) can insert a `0x97` byte for an em dash,
+   which makes the file **invalid UTF-8** and breaks tooling that reads it. Use the editor/`write`
+   path, or `-Encoding utf8`. `backend/tools/check_encoding.py <repo-root>` reports offenders.
 
 ## 8. Code quality commands
 
