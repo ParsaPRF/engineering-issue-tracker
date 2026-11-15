@@ -1,0 +1,18 @@
+# Normalise line endings so a checkout on Windows cannot break the Linux containers.
+# ``docker/entrypoint.sh`` and the Dockerfiles *must* keep LF, or the shebang becomes
+# "bad interpreter: /bin/sh^M" inside the image.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.conf text eol=lf
+*.json text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf

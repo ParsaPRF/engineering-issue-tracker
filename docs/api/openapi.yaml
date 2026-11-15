@@ -1,0 +1,3899 @@
+openapi: 3.0.3
+info:
+  title: Engineering Issue & Ticket Tracking System API
+  version: 1.0.0
+  description: Versioned REST API for projects, tickets, the ticket workflow, collaboration,
+    notifications, audit and reporting. Authentication is session-based; obtain the
+    `csrftoken` cookie from `/api/v1/auth/csrf/` and send it as the `X-CSRFToken`
+    header on unsafe requests.
+paths:
+  /api/v1/auth/csrf/:
+    get:
+      operationId: auth_csrf_retrieve
+      description: Set the CSRF cookie required by session-authenticated writes.
+      tags:
+      - auth
+      security:
+      - {}
+      responses:
+        '200':
+          description: CSRF cookie set.
+  /api/v1/auth/register/:
+    post:
+      operationId: auth_register_create
+      description: Create an account with the least-privileged system role (REPORTER).
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+        '400':
+          description: Validation error.
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: |-
+        ``POST /api/v1/auth/login/`` — start a session.
+
+        CSRF-protected on purpose (see ``RegisterView``): without it, an attacker could log a victim
+        into an account the attacker controls and observe what the victim does next.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+        '400':
+          description: Invalid credentials.
+        '403':
+          description: Account inactive.
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: '``POST /api/v1/auth/logout/`` — end the session.'
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: Session ended.
+  /api/v1/auth/me/:
+    get:
+      operationId: auth_me_retrieve
+      description: |-
+        ``GET``/``PATCH /api/v1/auth/me/`` — the caller's own account and profile.
+
+        ``system_role`` and ``is_active`` are absent from the update serializer, so a user cannot
+        promote themselves or reactivate their own disabled account (FR-1.5).
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    put:
+      operationId: auth_me_update
+      description: |-
+        ``GET``/``PATCH /api/v1/auth/me/`` — the caller's own account and profile.
+
+        ``system_role`` and ``is_active`` are absent from the update serializer, so a user cannot
+        promote themselves or reactivate their own disabled account (FR-1.5).
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MeUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeUpdate'
+          description: ''
+    patch:
+      operationId: auth_me_partial_update
+      description: |-
+        ``GET``/``PATCH /api/v1/auth/me/`` — the caller's own account and profile.
+
+        ``system_role`` and ``is_active`` are absent from the update serializer, so a user cannot
+        promote themselves or reactivate their own disabled account (FR-1.5).
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMeUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/me/password/:
+    post:
+      operationId: auth_me_password_create
+      description: |-
+        ``POST /api/v1/auth/me/password/`` — self-service password change.
+
+        Changing a password invalidates other sessions, which is what users expect after a suspected
+        compromise; the current session is re-established so the caller is not logged out of the tab
+        they are using.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: Password changed.
+  /api/v1/auth/users/:
+    get:
+      operationId: auth_users_list
+      description: |-
+        Administrator user management under ``/api/v1/auth/users/``.
+
+        Read-only as a viewset plus explicit ``@action`` methods, instead of a full ``ModelViewSet``:
+        creating users through the admin API would need a different payload (invitations, initial
+        password policy) and deleting them is not part of the lifecycle at all (UC-17).
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: system_role
+        schema:
+          type: string
+          enum:
+          - ADMIN
+          - ENGINEER
+          - PROJECT_MANAGER
+          - REPORTER
+        description: |-
+          Global capability. Project access is granted separately by membership.
+
+          * `REPORTER` - Reporter
+          * `ENGINEER` - Engineer
+          * `PROJECT_MANAGER` - Project Manager
+          * `ADMIN` - Administrator
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserList'
+          description: ''
+  /api/v1/auth/users/directory/:
+    get:
+      operationId: auth_users_directory_list
+      description: |-
+        People search used when adding project members (FR-2.5).
+
+        Open to Admins and Project Managers — the roles that manage membership — and bounded to 20
+        results. Engineers and Reporters do not get a browsable directory: least privilege, and an
+        unbounded user list is an enumeration target.
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: system_role
+        schema:
+          type: string
+          enum:
+          - ADMIN
+          - ENGINEER
+          - PROJECT_MANAGER
+          - REPORTER
+        description: |-
+          Global capability. Project access is granted separately by membership.
+
+          * `REPORTER` - Reporter
+          * `ENGINEER` - Engineer
+          * `PROJECT_MANAGER` - Project Manager
+          * `ADMIN` - Administrator
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserSummaryList'
+          description: ''
+  /api/v1/auth/users/{id}/:
+    get:
+      operationId: auth_users_retrieve
+      description: |-
+        Administrator user management under ``/api/v1/auth/users/``.
+
+        Read-only as a viewset plus explicit ``@action`` methods, instead of a full ``ModelViewSet``:
+        creating users through the admin API would need a different payload (invitations, initial
+        password policy) and deleting them is not part of the lifecycle at all (UC-17).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/users/{id}/activate/:
+    post:
+      operationId: auth_users_activate_create
+      description: |-
+        Administrator user management under ``/api/v1/auth/users/``.
+
+        Read-only as a viewset plus explicit ``@action`` methods, instead of a full ``ModelViewSet``:
+        creating users through the admin API would need a different payload (invitations, initial
+        password policy) and deleting them is not part of the lifecycle at all (UC-17).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/users/{id}/role/:
+    patch:
+      operationId: auth_users_role_partial_update
+      description: |-
+        Administrator user management under ``/api/v1/auth/users/``.
+
+        Read-only as a viewset plus explicit ``@action`` methods, instead of a full ``ModelViewSet``:
+        creating users through the admin API would need a different payload (invitations, initial
+        password policy) and deleting them is not part of the lifecycle at all (UC-17).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSystemRoleUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSystemRoleUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSystemRoleUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/users/{id}/deactivate/:
+    post:
+      operationId: auth_users_deactivate_create
+      description: |-
+        Administrator user management under ``/api/v1/auth/users/``.
+
+        Read-only as a viewset plus explicit ``@action`` methods, instead of a full ``ModelViewSet``:
+        creating users through the admin API would need a different payload (invitations, initial
+        password policy) and deleting them is not part of the lifecycle at all (UC-17).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this user.
+        required: true
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/projects/:
+    get:
+      operationId: projects_list
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: query
+        name: key
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        description: |-
+          * `ACTIVE` - Active
+          * `ARCHIVED` - Archived
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProjectList'
+          description: ''
+    post:
+      operationId: projects_create
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      tags:
+      - projects
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/projects/{id}/:
+    get:
+      operationId: projects_retrieve
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+    patch:
+      operationId: projects_partial_update
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - projects
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProjectUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/projects/{id}/archive/:
+    post:
+      operationId: projects_archive_create
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/projects/{id}/components/:
+    get:
+      operationId: projects_components_list
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: query
+        name: key
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        description: |-
+          * `ACTIVE` - Active
+          * `ARCHIVED` - Archived
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedComponentList'
+          description: ''
+    post:
+      operationId: projects_components_create
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: query
+        name: key
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        description: |-
+          * `ACTIVE` - Active
+          * `ARCHIVED` - Archived
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedComponentList'
+          description: ''
+  /api/v1/projects/{id}/members/{membership_id}/:
+    patch:
+      operationId: projects_members_partial_update
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: path
+        name: membership_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - projects
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMembership'
+          description: ''
+    delete:
+      operationId: projects_members_destroy
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: path
+        name: membership_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMembership'
+          description: ''
+  /api/v1/projects/{id}/members/:
+    get:
+      operationId: projects_members_list
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: query
+        name: key
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        description: |-
+          * `ACTIVE` - Active
+          * `ARCHIVED` - Archived
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProjectMembershipList'
+          description: ''
+    post:
+      operationId: projects_members_create
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      - in: query
+        name: key
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - ACTIVE
+          - ARCHIVED
+        description: |-
+          * `ACTIVE` - Active
+          * `ARCHIVED` - Archived
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProjectMembershipList'
+          description: ''
+  /api/v1/projects/{id}/restore/:
+    post:
+      operationId: projects_restore_create
+      description: |-
+        ``/api/v1/projects/`` — list, create, retrieve, update, archive, members, components, stats.
+
+        Built from explicit mixins rather than ``ModelViewSet``: there is no ``update`` (replaced by a
+        validated ``partial_update``) and no ``destroy`` at all, because projects are archived, never
+        deleted (FR-2.4).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+          description: ''
+  /api/v1/projects/{id}/stats/:
+    get:
+      operationId: projects_stats_retrieve
+      description: Ticket statistics for one project.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this project.
+        required: true
+      tags:
+      - projects
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/components/{id}/:
+    get:
+      operationId: components_retrieve
+      description: |-
+        ``/api/v1/components/`` — detail operations for components.
+
+        Listing and creation happen under their project (``/projects/<id>/components/``) because a
+        component only makes sense inside a project; this viewset exists so a component can be updated
+        or retired without repeating the project in the URL.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this component.
+        required: true
+      tags:
+      - components
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Component'
+          description: ''
+    patch:
+      operationId: components_partial_update
+      description: |-
+        ``/api/v1/components/`` — detail operations for components.
+
+        Listing and creation happen under their project (``/projects/<id>/components/``) because a
+        component only makes sense inside a project; this viewset exists so a component can be updated
+        or retired without repeating the project in the URL.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this component.
+        required: true
+      tags:
+      - components
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedComponentUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedComponentUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedComponentUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Component'
+          description: ''
+  /api/v1/components/{id}/deactivate/:
+    post:
+      operationId: components_deactivate_create
+      description: |-
+        ``/api/v1/components/`` — detail operations for components.
+
+        Listing and creation happen under their project (``/projects/<id>/components/``) because a
+        component only makes sense inside a project; this viewset exists so a component can be updated
+        or retired without repeating the project in the URL.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this component.
+        required: true
+      tags:
+      - components
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Component'
+          description: ''
+  /api/v1/tickets/:
+    get:
+      operationId: tickets_list
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      parameters:
+      - in: query
+        name: assignee
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: component
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: created_after
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: created_before
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: due_after
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: due_before
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: label
+        schema:
+          type: string
+        description: Label name or id
+      - in: query
+        name: open_only
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: overdue
+        schema:
+          type: boolean
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: priority
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: project
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: reporter
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: severity
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: type
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: unassigned
+        schema:
+          type: boolean
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTicketListList'
+          description: ''
+    post:
+      operationId: tickets_create
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      tags:
+      - tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TicketCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TicketCreateRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+          description: ''
+  /api/v1/tickets/choices/:
+    get:
+      operationId: tickets_choices_retrieve
+      description: |-
+        Enumerations for the ticket forms.
+
+        Exposed so the frontend does not hard-code statuses and priorities: adding a state in the
+        backend then shows up in the UI without a frontend release.
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketChoices'
+          description: ''
+  /api/v1/tickets/my-assignments/:
+    get:
+      operationId: tickets_my_assignments_list
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      parameters:
+      - in: query
+        name: assignee
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: component
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: created_after
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: created_before
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: due_after
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: due_before
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: label
+        schema:
+          type: string
+        description: Label name or id
+      - in: query
+        name: open_only
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: overdue
+        schema:
+          type: boolean
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: priority
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: project
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: reporter
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: severity
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: type
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: unassigned
+        schema:
+          type: boolean
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTicketListList'
+          description: ''
+  /api/v1/tickets/{id}/:
+    get:
+      operationId: tickets_retrieve
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this ticket.
+        required: true
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+          description: ''
+    patch:
+      operationId: tickets_partial_update
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this ticket.
+        required: true
+      tags:
+      - tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTicketUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTicketUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTicketUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+          description: ''
+  /api/v1/tickets/{id}/assign/:
+    post:
+      operationId: tickets_assign_create
+      description: '``/api/v1/tickets/`` — the ticket collection and its operations.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this ticket.
+        required: true
+      tags:
+      - tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignTicketRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssignTicketRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssignTicketRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+          description: ''
+  /api/v1/labels/:
+    get:
+      operationId: labels_list
+      description: |-
+        ``/api/v1/labels/`` — project labels.
+
+        Scoped by project like everything else: a caller only sees labels of projects they belong to, and
+        only managers may create them (labels are project taxonomy, not personal tags).
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: project
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - labels
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLabelList'
+          description: ''
+    post:
+      operationId: labels_create
+      description: |-
+        ``/api/v1/labels/`` — project labels.
+
+        Scoped by project like everything else: a caller only sees labels of projects they belong to, and
+        only managers may create them (labels are project taxonomy, not personal tags).
+      tags:
+      - labels
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Label'
+          description: ''
+  /api/v1/workflows/:
+    get:
+      operationId: workflows_retrieve
+      description: '``GET /workflows/`` — the complete lifecycle definition, for documentation
+        and clients.'
+      tags:
+      - workflows
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/workflows/transitions/:
+    get:
+      operationId: workflows_transitions_retrieve
+      description: |-
+        ``GET /workflows/transitions/?ticket=<uuid>`` — what the caller may do next (FR-5.8).
+
+        The frontend renders status buttons from this response, so the UI can never offer a move the
+        backend would reject, and can explain unavailable ones through ``blocked_by``.
+      tags:
+      - workflows
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/tickets/{ticket_id}/history/:
+    get:
+      operationId: tickets_history_list
+      description: Ticket-scoped workflow actions, mounted under ``/tickets/<ticket_id>/``.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this ticket.
+        required: true
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedStatusHistoryList'
+          description: ''
+  /api/v1/tickets/{ticket_id}/transitions/:
+    post:
+      operationId: tickets_transitions_create
+      description: Ticket-scoped workflow actions, mounted under ``/tickets/<ticket_id>/``.
+      parameters:
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this ticket.
+        required: true
+      tags:
+      - tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionInputRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TransitionInputRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TransitionInputRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+          description: ''
+  /api/v1/tickets/{ticket_id}/comments/:
+    get:
+      operationId: tickets_comments_list
+      description: '``GET`` / ``POST /api/v1/tickets/<ticket_id>/comments/``.'
+      parameters:
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Comment'
+          description: ''
+    post:
+      operationId: tickets_comments_create
+      description: '``GET`` / ``POST /api/v1/tickets/<ticket_id>/comments/``.'
+      parameters:
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - tickets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CommentCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CommentCreateRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+          description: ''
+  /api/v1/comments/{id}/:
+    get:
+      operationId: comments_retrieve
+      description: '``/api/v1/comments/<id>/`` — retrieve, edit, delete.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this comment.
+        required: true
+      tags:
+      - comments
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+          description: ''
+    patch:
+      operationId: comments_partial_update
+      description: '``/api/v1/comments/<id>/`` — retrieve, edit, delete.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this comment.
+        required: true
+      tags:
+      - comments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCommentUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCommentUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCommentUpdateRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+          description: ''
+    delete:
+      operationId: comments_destroy
+      description: '``/api/v1/comments/<id>/`` — retrieve, edit, delete.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this comment.
+        required: true
+      tags:
+      - comments
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/tickets/{ticket_id}/attachments/:
+    get:
+      operationId: tickets_attachments_list
+      description: '``GET`` / ``POST /api/v1/tickets/<ticket_id>/attachments/``.'
+      parameters:
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attachment'
+          description: ''
+    post:
+      operationId: tickets_attachments_create
+      description: '``GET`` / ``POST /api/v1/tickets/<ticket_id>/attachments/``.'
+      parameters:
+      - in: path
+        name: ticket_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - tickets
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attachment'
+          description: ''
+  /api/v1/comments/{comment_id}/attachments/:
+    post:
+      operationId: comments_attachments_create
+      description: '``POST /api/v1/comments/<comment_id>/attachments/`` — attach evidence
+        to a comment.'
+      parameters:
+      - in: path
+        name: comment_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - comments
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attachment'
+          description: ''
+  /api/v1/attachments/{id}/download/:
+    get:
+      operationId: attachments_download_retrieve
+      description: |-
+        Stream the private object to an authorised caller.
+
+        Not a serializer-based action: the response is a file stream, and routing it through DRF's
+        content negotiation would be pointless overhead.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - attachments
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          description: ''
+  /api/v1/attachments/:
+    get:
+      operationId: attachments_list
+      description: '``/api/v1/attachments/`` — list, delete, download.'
+      parameters:
+      - in: query
+        name: comment
+        schema:
+          type: string
+          format: uuid
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: ticket
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - attachments
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAttachmentList'
+          description: ''
+  /api/v1/attachments/{id}/:
+    delete:
+      operationId: attachments_destroy
+      description: '``/api/v1/attachments/`` — list, delete, download.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this attachment.
+        required: true
+      tags:
+      - attachments
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/notifications/:
+    get:
+      operationId: notifications_list
+      description: '``/api/v1/notifications/`` — the signed-in user''s inbox.'
+      parameters:
+      - in: query
+        name: event_type
+        schema:
+          type: string
+          enum:
+          - comment.added
+          - membership.added
+          - ticket.assigned
+          - ticket.created
+          - ticket.reassigned
+          - ticket.reopened
+          - ticket.resolved
+          - ticket.status_changed
+        description: |-
+          * `ticket.created` - Ticket created
+          * `ticket.assigned` - Ticket assigned
+          * `ticket.reassigned` - Ticket reassigned
+          * `ticket.status_changed` - Ticket status changed
+          * `ticket.resolved` - Ticket resolved
+          * `ticket.reopened` - Ticket reopened
+          * `comment.added` - Comment added
+          * `membership.added` - Added to a project
+      - in: query
+        name: is_read
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - notifications
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNotificationList'
+          description: ''
+  /api/v1/notifications/read-all/:
+    post:
+      operationId: notifications_read_all_create
+      description: '``/api/v1/notifications/`` — the signed-in user''s inbox.'
+      tags:
+      - notifications
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/notifications/unread-count/:
+    get:
+      operationId: notifications_unread_count_retrieve
+      description: Cheap endpoint for the bell badge (a scalar, not a page of rows).
+      tags:
+      - notifications
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/notifications/{id}/:
+    get:
+      operationId: notifications_retrieve
+      description: '``/api/v1/notifications/`` — the signed-in user''s inbox.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this notification.
+        required: true
+      tags:
+      - notifications
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/v1/notifications/{id}/read/:
+    post:
+      operationId: notifications_read_create
+      description: '``/api/v1/notifications/`` — the signed-in user''s inbox.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this notification.
+        required: true
+      tags:
+      - notifications
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /api/v1/audit/:
+    get:
+      operationId: audit_list
+      description: List audit events. Administrator only.
+      parameters:
+      - in: query
+        name: action
+        schema:
+          type: string
+      - in: query
+        name: actor
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: object_type
+        schema:
+          type: string
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: project
+        schema:
+          type: string
+          format: uuid
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: ticket
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - audit
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditEventList'
+          description: ''
+  /api/v1/audit/{id}/:
+    get:
+      operationId: audit_retrieve
+      description: |-
+        ``GET /api/v1/audit/`` and ``GET /api/v1/audit/<id>/``.
+
+        Only administrators may use the full audit API; project members see their project's activity
+        through the reports endpoints instead.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this audit event.
+        required: true
+      tags:
+      - audit
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEvent'
+          description: ''
+  /api/v1/reports/dashboard/:
+    get:
+      operationId: reports_dashboard_retrieve
+      description: '``GET /api/v1/reports/dashboard/`` — headline counts and breakdowns
+        (FR-9.1, FR-9.2).'
+      tags:
+      - reports
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/reports/workload/:
+    get:
+      operationId: reports_workload_retrieve
+      description: '``GET /api/v1/reports/workload/`` — open tickets per engineer
+        (FR-9.3).'
+      tags:
+      - reports
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/reports/my-workload/:
+    get:
+      operationId: reports_my_workload_retrieve
+      description: '``GET /api/v1/reports/my-workload/`` — the signed-in user''s own
+        summary (FR-9.4).'
+      tags:
+      - reports
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/reports/recent-activity/:
+    get:
+      operationId: reports_recent_activity_retrieve
+      description: '``GET /api/v1/reports/recent-activity/`` — audit feed limited
+        to visible projects (FR-9.4).'
+      tags:
+      - reports
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/reports/projects/:
+    get:
+      operationId: reports_projects_retrieve
+      description: |-
+        ``GET /api/v1/reports/projects/`` — projects and counts for the dashboard filter.
+
+        A dedicated endpoint rather than reusing ``/projects/``: the dashboard only needs id, key, name and
+        two counters, and this response stays small enough to cache client-side.
+      tags:
+      - reports
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          description: No response body
+components:
+  schemas:
+    AssignTicketRequest:
+      type: object
+      description: '``POST /tickets/<id>/assign/`` payload. ``assignee: null`` unassigns.'
+      properties:
+        assignee:
+          type: string
+          format: uuid
+          nullable: true
+    Attachment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        ticket:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        comment:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        uploader:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        original_name:
+          type: string
+          readOnly: true
+          title: Original file name
+        content_type:
+          type: string
+          readOnly: true
+        size_bytes:
+          type: integer
+          readOnly: true
+          title: Size (bytes)
+        sha256:
+          type: string
+          readOnly: true
+          title: Sha256 checksum
+        download_url:
+          type: string
+          description: 'Relative API path, not a storage URL: the request still has
+            to be authorised.'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - comment
+      - content_type
+      - created_at
+      - download_url
+      - id
+      - original_name
+      - sha256
+      - size_bytes
+      - ticket
+      - uploader
+    AuditEvent:
+      type: object
+      description: Read-only projection of an audit event.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        action:
+          type: string
+          readOnly: true
+        actor:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          description: Null when the system acted or the account was removed; the
+            event survives.
+        actor_email:
+          type: string
+          format: email
+          readOnly: true
+        actor_name:
+          type: string
+          readOnly: true
+        object_type:
+          type: string
+          readOnly: true
+          description: Django label of the affected object, e.g. tickets.ticket.
+        object_id:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        project:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        project_key:
+          type: string
+          readOnly: true
+        ticket:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        ticket_key:
+          type: string
+          readOnly: true
+        metadata:
+          readOnly: true
+        ip_address:
+          type: string
+          readOnly: true
+          nullable: true
+        user_agent:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - action
+      - actor
+      - actor_email
+      - actor_name
+      - created_at
+      - id
+      - ip_address
+      - metadata
+      - object_id
+      - object_type
+      - project
+      - project_key
+      - ticket
+      - ticket_key
+      - user_agent
+    Comment:
+      type: object
+      description: Read representation of a comment.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        ticket:
+          type: string
+          format: uuid
+          readOnly: true
+        author:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        body:
+          type: string
+          readOnly: true
+        is_deleted:
+          type: boolean
+          readOnly: true
+          title: Deleted
+          description: 'Soft deletion: the row is retained so history stays traceable.'
+        is_edited:
+          type: boolean
+          readOnly: true
+        edited_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          description: Set when the author edits the body.
+        attachment_count:
+          type: integer
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - attachment_count
+      - author
+      - body
+      - created_at
+      - edited_at
+      - id
+      - is_deleted
+      - is_edited
+      - ticket
+      - updated_at
+    CommentCreateRequest:
+      type: object
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+      required:
+      - body
+    Component:
+      type: object
+      description: Read representation of a component.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        project:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        description:
+          type: string
+          readOnly: true
+        lead:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - description
+      - id
+      - is_active
+      - lead
+      - name
+      - project
+      - updated_at
+    ComponentRef:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+      required:
+      - id
+      - name
+    Label:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        color:
+          type: string
+          readOnly: true
+          description: Hex colour used by the UI badge.
+      required:
+      - color
+      - id
+      - name
+    LoginRequest:
+      type: object
+      description: |-
+        Input for session login.
+
+        Credential *checking* happens in ``services.auth.session_login`` because it needs the request
+        to create a session; this serializer only guarantees the fields are present and well-formed.
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - password
+    MeUpdate:
+      type: object
+      description: 'PATCH /auth/me/ payload: ``full_name`` and/or nested ``profile``
+        fields.'
+      properties:
+        full_name:
+          type: string
+          maxLength: 150
+        profile:
+          $ref: '#/components/schemas/ProfileUpdate'
+    MeUpdateRequest:
+      type: object
+      description: 'PATCH /auth/me/ payload: ``full_name`` and/or nested ``profile``
+        fields.'
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        profile:
+          $ref: '#/components/schemas/ProfileUpdateRequest'
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        event_type:
+          allOf:
+          - $ref: '#/components/schemas/NotificationEventEnum'
+          readOnly: true
+        title:
+          type: string
+          readOnly: true
+        body:
+          type: string
+          readOnly: true
+        actor:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+          description: Who caused the event. Null when the system acted.
+        actor_name:
+          type: string
+          readOnly: true
+        ticket:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        ticket_key:
+          type: string
+          readOnly: true
+        project:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        project_key:
+          type: string
+          readOnly: true
+        payload:
+          readOnly: true
+        is_read:
+          type: boolean
+          readOnly: true
+          title: Read
+        read_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        is_sent:
+          type: boolean
+          readOnly: true
+          title: Dispatched
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - actor
+      - actor_name
+      - body
+      - created_at
+      - event_type
+      - id
+      - is_read
+      - is_sent
+      - payload
+      - project
+      - project_key
+      - read_at
+      - ticket
+      - ticket_key
+      - title
+    NotificationEventEnum:
+      enum:
+      - ticket.created
+      - ticket.assigned
+      - ticket.reassigned
+      - ticket.status_changed
+      - ticket.resolved
+      - ticket.reopened
+      - comment.added
+      - membership.added
+      type: string
+      description: |-
+        * `ticket.created` - Ticket created
+        * `ticket.assigned` - Ticket assigned
+        * `ticket.reassigned` - Ticket reassigned
+        * `ticket.status_changed` - Ticket status changed
+        * `ticket.resolved` - Ticket resolved
+        * `ticket.reopened` - Ticket reopened
+        * `comment.added` - Comment added
+        * `membership.added` - Added to a project
+    PaginatedAttachmentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+    PaginatedAuditEventList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+    PaginatedComponentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Component'
+    PaginatedLabelList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Label'
+    PaginatedNotificationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+    PaginatedProjectList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+    PaginatedProjectMembershipList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectMembership'
+    PaginatedStatusHistoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusHistory'
+    PaginatedTicketListList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketList'
+    PaginatedUserList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+    PaginatedUserSummaryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserSummary'
+    PasswordChangeRequest:
+      type: object
+      description: Self-service password change.
+      properties:
+        current_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - current_password
+      - new_password
+      - new_password_confirm
+    PatchedCommentUpdateRequest:
+      type: object
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+    PatchedComponentUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+        lead:
+          type: string
+          format: uuid
+          nullable: true
+        is_active:
+          type: boolean
+    PatchedMeUpdateRequest:
+      type: object
+      description: 'PATCH /auth/me/ payload: ``full_name`` and/or nested ``profile``
+        fields.'
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        profile:
+          $ref: '#/components/schemas/ProfileUpdateRequest'
+    PatchedMembershipRoleUpdateRequest:
+      type: object
+      description: '``PATCH /projects/<id>/members/<membership_id>/`` payload.'
+      properties:
+        role:
+          $ref: '#/components/schemas/ProjectRoleEnum'
+    PatchedProjectUpdateRequest:
+      type: object
+      description: '``PATCH /projects/<id>/`` payload. ``key`` is immutable: it is
+        the ticket-key prefix.'
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+    PatchedSystemRoleUpdateRequest:
+      type: object
+      description: Admin-only system role change (FR-1.6).
+      properties:
+        system_role:
+          $ref: '#/components/schemas/SystemRoleEnum'
+    PatchedTicketUpdateRequest:
+      type: object
+      description: |-
+        ``PATCH /tickets/<id>/`` payload.
+
+        Every field is optional; the *service* decides which of them this actor may actually change, so
+        the error says "you cannot edit this field" rather than "unknown field".
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          minLength: 1
+        type:
+          $ref: '#/components/schemas/TicketTypeEnum'
+        priority:
+          $ref: '#/components/schemas/PriorityEnum'
+        severity:
+          $ref: '#/components/schemas/SeverityEnum'
+        component:
+          type: string
+          format: uuid
+          nullable: true
+        due_date:
+          type: string
+          format: date
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+            format: uuid
+    PriorityEnum:
+      enum:
+      - LOWEST
+      - LOW
+      - MEDIUM
+      - HIGH
+      - CRITICAL
+      type: string
+      description: |-
+        * `LOWEST` - Lowest
+        * `LOW` - Low
+        * `MEDIUM` - Medium
+        * `HIGH` - High
+        * `CRITICAL` - Critical
+    ProfileUpdate:
+      type: object
+      description: Writable subset of the profile.
+      properties:
+        job_title:
+          type: string
+          maxLength: 120
+        phone:
+          type: string
+          maxLength: 32
+        timezone:
+          type: string
+          title: Time zone
+          description: IANA name, e.g. Europe/Berlin. Used to render times for this
+            user.
+          maxLength: 64
+        notify_on_assignment:
+          type: boolean
+        notify_on_comment:
+          type: boolean
+        notify_on_status_change:
+          type: boolean
+    ProfileUpdateRequest:
+      type: object
+      description: Writable subset of the profile.
+      properties:
+        job_title:
+          type: string
+          maxLength: 120
+        phone:
+          type: string
+          maxLength: 32
+        timezone:
+          type: string
+          minLength: 1
+          title: Time zone
+          description: IANA name, e.g. Europe/Berlin. Used to render times for this
+            user.
+          maxLength: 64
+        notify_on_assignment:
+          type: boolean
+        notify_on_comment:
+          type: boolean
+        notify_on_status_change:
+          type: boolean
+    Project:
+      type: object
+      description: Read representation of a project.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        key:
+          type: string
+          readOnly: true
+          description: Short uppercase prefix for ticket keys, e.g. ENG.
+        name:
+          type: string
+          readOnly: true
+        description:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ProjectStatusEnum'
+          readOnly: true
+        owner:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        archived_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        member_count:
+          type: integer
+          nullable: true
+          readOnly: true
+        ticket_count:
+          type: integer
+          nullable: true
+          readOnly: true
+        open_ticket_count:
+          type: integer
+          nullable: true
+          readOnly: true
+      required:
+      - archived_at
+      - created_at
+      - description
+      - id
+      - key
+      - member_count
+      - name
+      - open_ticket_count
+      - owner
+      - status
+      - ticket_count
+      - updated_at
+    ProjectCreateRequest:
+      type: object
+      description: |-
+        ``POST /projects/`` payload.
+
+        Note the (deliberate) absence of ``validators=[project_key_validator]`` on the field: DRF runs
+        field validators *before* ``validate_key``, so a validator here would reject ``"eng"`` before the
+        method had a chance to upper-case it. Normalisation first, then validation — the ordering bug
+        this comment exists to prevent from coming back.
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 10
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          default: ''
+      required:
+      - key
+      - name
+    ProjectMembership:
+      type: object
+      description: Read representation of a membership row.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/ProjectRoleEnum'
+          readOnly: true
+          title: Project role
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Deactivate to remove access while keeping the historical record.
+        joined_at:
+          type: string
+          format: date-time
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - is_active
+      - joined_at
+      - role
+      - user
+      - user_email
+      - user_name
+    ProjectRef:
+      type: object
+      description: Minimal project projection embedded in ticket payloads.
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - key
+      - name
+    ProjectRoleEnum:
+      enum:
+      - REPORTER
+      - ENGINEER
+      - MANAGER
+      type: string
+      description: |-
+        * `REPORTER` - Reporter
+        * `ENGINEER` - Engineer
+        * `MANAGER` - Project Manager
+    ProjectStatusEnum:
+      enum:
+      - ACTIVE
+      - ARCHIVED
+      type: string
+      description: |-
+        * `ACTIVE` - Active
+        * `ARCHIVED` - Archived
+    RegisterRequest:
+      type: object
+      description: Input for public registration (FR-1.1).
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        password_confirm:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - full_name
+      - password
+      - password_confirm
+    SeverityEnum:
+      enum:
+      - TRIVIAL
+      - MINOR
+      - MAJOR
+      - CRITICAL
+      - BLOCKER
+      type: string
+      description: |-
+        * `TRIVIAL` - Trivial
+        * `MINOR` - Minor
+        * `MAJOR` - Major
+        * `CRITICAL` - Critical
+        * `BLOCKER` - Blocker
+    StatusHistory:
+      type: object
+      description: One point in the ticket timeline.
+      properties:
+        id:
+          type: string
+          format: uuid
+        from_status:
+          type: string
+          nullable: true
+        to_status:
+          type: string
+        changed_by:
+          type: string
+          format: uuid
+        changed_by_name:
+          type: string
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - changed_by
+      - changed_by_name
+      - comment
+      - created_at
+      - from_status
+      - id
+      - to_status
+    SystemRoleEnum:
+      enum:
+      - REPORTER
+      - ENGINEER
+      - PROJECT_MANAGER
+      - ADMIN
+      type: string
+      description: |-
+        * `REPORTER` - Reporter
+        * `ENGINEER` - Engineer
+        * `PROJECT_MANAGER` - Project Manager
+        * `ADMIN` - Administrator
+    Ticket:
+      type: object
+      description: Full representation, including description and labels, used for
+        detail and mutations.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        key:
+          type: string
+          readOnly: true
+          title: Ticket key
+          description: Human-readable identifier, e.g. ENG-1042. Immutable once created.
+        project:
+          allOf:
+          - $ref: '#/components/schemas/ProjectRef'
+          readOnly: true
+        component:
+          allOf:
+          - $ref: '#/components/schemas/ComponentRef'
+          readOnly: true
+        title:
+          type: string
+          readOnly: true
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TicketTypeEnum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/TicketStatusEnum'
+          readOnly: true
+          description: |-
+            Changed only through the transition endpoint (ADR-005).
+
+            * `NEW` - New
+            * `TRIAGED` - Triaged
+            * `IN_PROGRESS` - In progress
+            * `IN_REVIEW` - In review
+            * `RESOLVED` - Resolved
+            * `CLOSED` - Closed
+            * `REOPENED` - Reopened
+            * `BLOCKED` - Blocked
+            * `REJECTED` - Rejected
+            * `DUPLICATE` - Duplicate
+        priority:
+          allOf:
+          - $ref: '#/components/schemas/PriorityEnum'
+          readOnly: true
+          description: |-
+            How soon this should be addressed.
+
+            * `LOWEST` - Lowest
+            * `LOW` - Low
+            * `MEDIUM` - Medium
+            * `HIGH` - High
+            * `CRITICAL` - Critical
+        severity:
+          allOf:
+          - $ref: '#/components/schemas/SeverityEnum'
+          readOnly: true
+          description: |-
+            How serious the technical impact is.
+
+            * `TRIVIAL` - Trivial
+            * `MINOR` - Minor
+            * `MAJOR` - Major
+            * `CRITICAL` - Critical
+            * `BLOCKER` - Blocker
+        reporter:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        assignee:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        due_date:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        is_overdue:
+          type: boolean
+          readOnly: true
+        comment_count:
+          type: integer
+          readOnly: true
+        attachment_count:
+          type: integer
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        description:
+          type: string
+          readOnly: true
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/Label'
+          readOnly: true
+        resolved_at:
+          type: string
+          format: date-time
+          readOnly: true
+        closed_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - assignee
+      - attachment_count
+      - closed_at
+      - comment_count
+      - component
+      - created_at
+      - description
+      - due_date
+      - id
+      - is_overdue
+      - key
+      - labels
+      - priority
+      - project
+      - reporter
+      - resolved_at
+      - severity
+      - status
+      - title
+      - type
+      - updated_at
+    TicketChoices:
+      type: object
+      description: '``GET /tickets/choices/`` — enumerations for building forms without
+        hard-coding them.'
+      properties:
+        statuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketStatusChoice'
+        types:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketStatusChoice'
+        priorities:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketStatusChoice'
+        severities:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketStatusChoice'
+      required:
+      - priorities
+      - severities
+      - statuses
+      - types
+    TicketCreateRequest:
+      type: object
+      description: '``POST /tickets/`` payload. ``status`` is not accepted: new tickets
+        always start at NEW.'
+      properties:
+        project:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          minLength: 1
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TicketTypeEnum'
+          default: BUG
+        priority:
+          allOf:
+          - $ref: '#/components/schemas/PriorityEnum'
+          default: MEDIUM
+        severity:
+          allOf:
+          - $ref: '#/components/schemas/SeverityEnum'
+          default: MAJOR
+        component:
+          type: string
+          format: uuid
+          nullable: true
+        assignee:
+          type: string
+          format: uuid
+          nullable: true
+        due_date:
+          type: string
+          format: date
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+      - description
+      - project
+      - title
+    TicketList:
+      type: object
+      description: Lean representation for tables.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        key:
+          type: string
+          readOnly: true
+          title: Ticket key
+          description: Human-readable identifier, e.g. ENG-1042. Immutable once created.
+        project:
+          allOf:
+          - $ref: '#/components/schemas/ProjectRef'
+          readOnly: true
+        component:
+          allOf:
+          - $ref: '#/components/schemas/ComponentRef'
+          readOnly: true
+        title:
+          type: string
+          readOnly: true
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TicketTypeEnum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/TicketStatusEnum'
+          readOnly: true
+          description: |-
+            Changed only through the transition endpoint (ADR-005).
+
+            * `NEW` - New
+            * `TRIAGED` - Triaged
+            * `IN_PROGRESS` - In progress
+            * `IN_REVIEW` - In review
+            * `RESOLVED` - Resolved
+            * `CLOSED` - Closed
+            * `REOPENED` - Reopened
+            * `BLOCKED` - Blocked
+            * `REJECTED` - Rejected
+            * `DUPLICATE` - Duplicate
+        priority:
+          allOf:
+          - $ref: '#/components/schemas/PriorityEnum'
+          readOnly: true
+          description: |-
+            How soon this should be addressed.
+
+            * `LOWEST` - Lowest
+            * `LOW` - Low
+            * `MEDIUM` - Medium
+            * `HIGH` - High
+            * `CRITICAL` - Critical
+        severity:
+          allOf:
+          - $ref: '#/components/schemas/SeverityEnum'
+          readOnly: true
+          description: |-
+            How serious the technical impact is.
+
+            * `TRIVIAL` - Trivial
+            * `MINOR` - Minor
+            * `MAJOR` - Major
+            * `CRITICAL` - Critical
+            * `BLOCKER` - Blocker
+        reporter:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        assignee:
+          allOf:
+          - $ref: '#/components/schemas/UserSummary'
+          readOnly: true
+        due_date:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        is_overdue:
+          type: boolean
+          readOnly: true
+        comment_count:
+          type: integer
+          readOnly: true
+        attachment_count:
+          type: integer
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - assignee
+      - attachment_count
+      - comment_count
+      - component
+      - created_at
+      - due_date
+      - id
+      - is_overdue
+      - key
+      - priority
+      - project
+      - reporter
+      - severity
+      - status
+      - title
+      - type
+      - updated_at
+    TicketStatusChoice:
+      type: object
+      description: 'Read-only helper for docs: the status enumeration.'
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+      required:
+      - label
+      - value
+    TicketStatusEnum:
+      enum:
+      - NEW
+      - TRIAGED
+      - IN_PROGRESS
+      - IN_REVIEW
+      - RESOLVED
+      - CLOSED
+      - REOPENED
+      - BLOCKED
+      - REJECTED
+      - DUPLICATE
+      type: string
+      description: |-
+        * `NEW` - New
+        * `TRIAGED` - Triaged
+        * `IN_PROGRESS` - In progress
+        * `IN_REVIEW` - In review
+        * `RESOLVED` - Resolved
+        * `CLOSED` - Closed
+        * `REOPENED` - Reopened
+        * `BLOCKED` - Blocked
+        * `REJECTED` - Rejected
+        * `DUPLICATE` - Duplicate
+    TicketTypeEnum:
+      enum:
+      - BUG
+      - TASK
+      - FEATURE
+      - CHANGE_REQUEST
+      - SUPPORT
+      type: string
+      description: |-
+        * `BUG` - Bug
+        * `TASK` - Task
+        * `FEATURE` - Feature
+        * `CHANGE_REQUEST` - Change request
+        * `SUPPORT` - Support request
+    TransitionInputRequest:
+      type: object
+      description: |-
+        Payload for a status change.
+
+        ``to_status`` is validated as a plain string here and against the state machine in the service:
+        the serializer cannot know the ticket's current status, so it cannot know which moves are legal.
+      properties:
+        to_status:
+          type: string
+          minLength: 1
+          maxLength: 20
+        comment:
+          type: string
+          default: ''
+      required:
+      - to_status
+    User:
+      type: object
+      description: Full read representation of a user, including the caller's memberships
+        when relevant.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          title: Email address
+          description: Login identifier. Stored lower-cased.
+        full_name:
+          type: string
+          readOnly: true
+        system_role:
+          allOf:
+          - $ref: '#/components/schemas/SystemRoleEnum'
+          readOnly: true
+          description: |-
+            Global capability. Project access is granted separately by membership.
+
+            * `REPORTER` - Reporter
+            * `ENGINEER` - Engineer
+            * `PROJECT_MANAGER` - Project Manager
+            * `ADMIN` - Administrator
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Deactivate instead of deleting so history stays attributable.
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+        profile:
+          allOf:
+          - $ref: '#/components/schemas/UserProfile'
+          readOnly: true
+        memberships:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+      required:
+      - date_joined
+      - email
+      - full_name
+      - id
+      - is_active
+      - memberships
+      - profile
+      - system_role
+    UserProfile:
+      type: object
+      description: Read representation of the profile.
+      properties:
+        job_title:
+          type: string
+          readOnly: true
+        phone:
+          type: string
+          readOnly: true
+        timezone:
+          type: string
+          readOnly: true
+          title: Time zone
+          description: IANA name, e.g. Europe/Berlin. Used to render times for this
+            user.
+        avatar_key:
+          type: string
+          readOnly: true
+          title: Avatar storage key
+          description: Object key in private storage. Never a public URL (ADR-010).
+        notify_on_assignment:
+          type: boolean
+          readOnly: true
+        notify_on_comment:
+          type: boolean
+          readOnly: true
+        notify_on_status_change:
+          type: boolean
+          readOnly: true
+      required:
+      - avatar_key
+      - job_title
+      - notify_on_assignment
+      - notify_on_comment
+      - notify_on_status_change
+      - phone
+      - timezone
+    UserSummary:
+      type: object
+      description: Directory-safe projection used by member pickers (`PUBLIC_USER_FIELDS`).
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          title: Email address
+          description: Login identifier. Stored lower-cased.
+        full_name:
+          type: string
+          readOnly: true
+        system_role:
+          allOf:
+          - $ref: '#/components/schemas/SystemRoleEnum'
+          readOnly: true
+          description: |-
+            Global capability. Project access is granted separately by membership.
+
+            * `REPORTER` - Reporter
+            * `ENGINEER` - Engineer
+            * `PROJECT_MANAGER` - Project Manager
+            * `ADMIN` - Administrator
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Deactivate instead of deleting so history stays attributable.
+      required:
+      - email
+      - full_name
+      - id
+      - is_active
+      - system_role
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid

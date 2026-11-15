@@ -1,0 +1,10 @@
+# Development dependencies: what a contributor needs to run, test and lint the project locally.
+# Install with:  pip install -r requirements/development.txt
+
+-r base.txt
+
+pytest==9.2.0
+pytest-django==4.14.0
+pytest-cov==7.1.0
+factory-boy==3.3.3                # test data factories (per app: apps/<app>/tests/factories.py)
+ruff==0.17.5                      # linting + import sorting, single fast tool

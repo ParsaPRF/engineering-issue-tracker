@@ -1,0 +1,3 @@
+# Convenience alias so `pip install -r requirements.txt` works during development.
+# For a production image use requirements/production.txt instead.
+-r requirements/development.txt

@@ -1,0 +1,71 @@
+[project]
+name = "eng-tracker-backend"
+version = "1.0.0"
+description = "Engineering Issue & Ticket Tracking System - Django backend (modular monolith)"
+requires-python = ">=3.12"
+
+# ---------------------------------------------------------------------------
+# pytest / pytest-django
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+testpaths = ["apps", "tests"]
+addopts = "-ra --strict-markers --strict-config --no-header"
+# `--strict-markers` turns a typo in a marker name into an error instead of a silent no-op, which
+# is what keeps the postgres-only tests verifiable rather than accidentally skipped everywhere.
+markers = [
+  "postgres: requires a PostgreSQL backend (deselected on SQLite; see ADR-008)",
+  "slow: takes more than a second and is excluded from the fast feedback loop",
+  "security: asserts a security property (authorisation, CSRF, upload validation)",
+]
+filterwarnings = [
+  "error::DeprecationWarning:apps.*",
+]
+
+[tool.coverage.run]
+source = ["apps", "common", "config"]
+omit = ["*/migrations/*", "*/tests/*", "*/__init__.py"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+]
+
+# ---------------------------------------------------------------------------
+# ruff: lint + import sorting in one tool (keeps the dependency list minimal)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+exclude = [".venv", "migrations", "staticfiles", "media"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "I",    # import sorting
+  "B",    # flake8-bugbear (likely bugs)
+  "UP",   # pyupgrade (modern syntax)
+  "DJ",   # flake8-django (e.g. mutable defaults in models)
+  "S",    # flake8-bandit (security smells)
+  "C4",   # comprehension clarity
+]
+ignore = [
+  "E501",   # line length is handled by the formatter, not by a hard error
+  "B008",   # Django/DRF idiom: function calls in argument defaults (e.g. Field(default=dict))
+  "S101",   # assert is fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S105", "S106", "S107"]        # hard-coded test passwords are intentional
+"config/settings/*" = ["F403", "S104"]        # star imports across settings; dev may bind 0.0.0.0
+"apps/*/migrations/*" = ["E", "F", "I", "DJ"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "common", "config"]

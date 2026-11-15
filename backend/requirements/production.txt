@@ -1,0 +1,10 @@
+# Production dependencies.
+#
+# Installed inside the backend container (Linux). gunicorn is not used on Windows, which is why it
+# is a production-only dependency: it installs anywhere, but only runs on Unix-like systems.
+#
+# Install with:  pip install -r requirements/production.txt
+
+-r base.txt
+
+gunicorn==27.0.1                  # WSGI application server behind Nginx

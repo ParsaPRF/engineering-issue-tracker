@@ -1,0 +1,178 @@
+# Development / single-host deployment stack.
+#
+# Services: PostgreSQL, Redis, MinIO (S3-compatible object storage), the Django API behind gunicorn,
+# a Celery worker, Celery beat, and Nginx serving the built SPA and proxying the API.
+#
+# Usage:
+#   cp .env.example .env      # then set real secrets
+#   docker compose up --build -d
+#   docker compose exec backend python manage.py migrate
+#   docker compose exec backend python manage.py createsuperuser
+#   docker compose exec backend python manage.py seed_demo   # optional demo data
+#
+# NOTE: this file could not be *executed* while building the project (no Docker daemon was available
+# in the development environment). It is validated as YAML and reviewed, but the first real
+# `docker compose up` should be treated as an installation step with its own verification — see
+# docs/development/deployment-guide.md, "Known unverified items".
+
+name: eng-tracker
+
+# Container-internal hostnames override whatever .env says for a laptop.
+x-backend-environment: &backend-environment
+  DJANGO_SETTINGS_MODULE: config.settings.production
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  CACHE_BACKEND: redis
+  CACHE_URL: redis://redis:6379/2
+  STORAGE_BACKEND: s3
+  AWS_S3_ENDPOINT_URL: http://minio:9000
+  AWS_S3_USE_SSL: "False"
+  AWS_S3_REGION_NAME: us-east-1
+  COLLECTSTATIC: "0"
+
+x-backend-common: &backend-common
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  image: eng-tracker-backend:local
+  env_file:
+    - .env
+  environment: *backend-environment
+  volumes:
+    - static_data:/app/staticfiles
+    - media_data:/app/media
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    # Not "minio healthy" but "bucket created": uploading to a missing bucket fails at runtime, and
+    # an ordering bug there is invisible until the first file upload.
+    minio-init:
+      condition: service_completed_successfully
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eng_tracker}
+      POSTGRES_USER: ${POSTGRES_USER:-eng_tracker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eng_tracker} -d ${POSTGRES_DB:-eng_tracker}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
+    volumes:
+      - miniodata:/data
+    ports:
+      # Console only; the S3 API stays on the internal network.
+      - "${MINIO_CONSOLE_PORT_HOST:-9001}:9001"
+    # The official image ships curl; if a future tag does not, swap this for the mc-based probe
+    # documented in the deployment guide.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
+      BUCKET: ${AWS_STORAGE_BUCKET_NAME:-eng-tracker-attachments}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/$$BUCKET &&
+      mc anonymous set none local/$$BUCKET &&
+      echo 'bucket ready (private)'
+      "
+    restart: "no"
+
+  backend:
+    <<: *backend-common
+    command:
+      ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000",
+       "--workers", "3", "--timeout", "60", "--access-logfile", "-"]
+    environment:
+      <<: *backend-environment
+      # Static files are collected by the web-serving container's dependency chain (this service),
+      # migrations stay an explicit release step.
+      COLLECTSTATIC: "1"
+      ENABLE_MIGRATIONS: "0"
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  worker:
+    <<: *backend-common
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "2"]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  beat:
+    <<: *backend-common
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    image: eng-tracker-frontend:local
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - static_data:/staticfiles:ro
+      - media_data:/media:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  static_data:
+  media_data:

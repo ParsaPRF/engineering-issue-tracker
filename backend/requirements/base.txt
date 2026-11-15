@@ -1,0 +1,23 @@
+# Runtime dependencies, pinned to the versions actually resolved and executed in this project.
+#
+# Verification date: 2026-11-15, Python 3.14.2.
+# Every pin below was installed and exercised by the test suite; see
+# docs/development/testing-guide.md for the recorded command output.
+#
+# Deliberately absent:
+#   * djangorestframework-simplejwt - session authentication is the chosen strategy (ADR-003).
+#   * whitenoise - Nginx serves static files in the deployed topology.
+#   * a generic repository/ORM abstraction library - Django's ORM plus selectors is enough.
+
+Django==5.2.19                    # LTS; official Python 3.14 support since 5.2.8 (ADR-002)
+djangorestframework==3.18.3
+django-filter==26.2               # declarative querystring filtering for list endpoints
+drf-spectacular==0.30.0           # OpenAPI 3 schema + Swagger/ReDoc UI (ADR-013)
+django-cors-headers==4.9.0        # explicit origin allow-list with credentials
+django-environ==0.14.0            # 12-factor configuration from environment variables
+psycopg[binary]==3.3.9            # PostgreSQL driver (binary wheel: no local libpq needed)
+celery==5.7.0                     # asynchronous notification dispatch (ADR-009)
+redis==8.1.0                      # Celery broker / cache client
+django-storages==1.14.6           # S3-compatible storage backend for attachments
+boto3==1.44.3                     # MinIO/S3 client used by django-storages
+tzdata==2026.6                    # IANA time zone database; required by zoneinfo on Windows
