@@ -34,6 +34,7 @@ apps with their own models, services, API and tests.
 | [Testing guide](docs/development/testing-guide.md) | test layout, markers, writing new tests |
 | [Deployment guide](docs/development/deployment-guide.md) | Docker Compose, Nginx, TLS, backups, hardening |
 | [Developer learning guide](docs/learning/developer-learning-guide.md) | mentor-mode explanations per phase |
+| [Changelog](CHANGELOG.md) | release notes, including the defects found and fixed |
 
 ## Quick start (local, no Docker)
 
