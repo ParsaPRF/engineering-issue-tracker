@@ -161,11 +161,12 @@ docker compose exec backend python manage.py check --deploy
 
 | Item | Status |
 | --- | --- |
-| `docker compose up` executed end-to-end | **Not executed here**: the development machine had no Docker daemon. The file passes `docker compose --env-file .env.example config` (exit 0) and was reviewed service by service. |
-| MinIO bucket creation (`minio-init`) | Not executed locally; script reviewed. |
+| `docker compose up` executed end-to-end | **Not executed on the delivery workstation** (no Docker daemon). CI does build both images, render the compose file, and boot the backend container against a real PostgreSQL with a green `/health/`. |
+| MinIO bucket creation (`minio-init`) | Not executed; script reviewed. Covered by the manual checklist. |
 | MinIO healthcheck using `curl` | Standard for the official image, but not verified against a pulled tag here. If a tag lacks `curl`, replace with the `mc ready local` probe. |
-| Nginx + built SPA served together | Not executed locally (frontend build is in the frontend delivery). |
-| PostgreSQL-only behaviour | Verified only by tests marked `postgres`, which were skipped locally (see the testing guide). |
+| Nginx + built SPA served together | The SPA image builds in CI; serving it behind Nginx in a live stack is unexercised. |
+| PostgreSQL-only behaviour | **Verified**: CI runs the full suite on PostgreSQL 17 (229 passed, 0 skipped). It also caught a real `FOR UPDATE` + nullable-join bug — see the testing guide. |
+| Redis / Celery against a real broker | Not verified; tests run eager. |
 
 Treat the first `docker compose up` as an installation step with its own verification pass against
 the checklist above — not as something this document can promise on its behalf.

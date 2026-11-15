@@ -61,7 +61,7 @@ The skip hook is deliberate: a test that silently stops testing row locking is w
 
 ## 5. Recorded results
 
-Last full run during delivery (2026-11-15, Python 3.14.2, Django 5.2.19, SQLite):
+Local run during delivery (2026-11-15, Python 3.14.2, Django 5.2.19, **SQLite**):
 
 ```
 $ .venv/Scripts/python -m pytest apps tests -q
@@ -74,6 +74,17 @@ SKIPPED [1] apps\tickets\tests\test_ticket_keys.py:115: requires PostgreSQL (see
 228 passed, 1 skipped in 7.76s
 ```
 
+Continuous integration run (same commit family, **PostgreSQL 17**, GitHub Actions):
+
+```
+$ pytest -q --no-header -ra      # DB_ENGINE=postgres
+229 passed in 12.51s
+no skipped tests
+```
+
+The difference is the point: the concurrency test only exists in the PostgreSQL run, and the CI job
+fails if anything is skipped so it cannot silently disappear.
+
 Lint:
 
 ```
@@ -84,11 +95,39 @@ All checks passed!
 Schema:
 
 ```
-$ .venv/Scripts/python manage.py spectacular --file ../docs/api/openapi.yaml
+$ .venv/Scripts/python manage.py spectacular --fail-on-warn --file ../docs/api/openapi.yaml
 Schema generation summary:
 Warnings: 0 (0 unique)
 Errors:   0 (0 unique)
 ```
+
+## 6. Continuous integration (`.github/workflows/ci.yml`)
+
+| Job | What it proves |
+| --- | --- |
+| Lint, schema, migrations | style, import order, `makemigrations --check`, `manage.py check`, a schema that generates with **zero warnings** |
+| Backend tests (PostgreSQL 17) | the full suite on the production database, with **no skips allowed** |
+| Frontend build | `tsc --noEmit` and `vite build` succeed with a frozen lockfile |
+| Docker images build | both Dockerfiles build, the compose file renders, and the backend container starts against a real PostgreSQL and answers `/health/` with `ok` |
+
+### The bug CI was built for — and immediately found
+
+The first PostgreSQL run failed 38 tests with:
+
+```
+django.db.utils.NotSupportedError: FOR UPDATE cannot be applied to the nullable side of an outer join
+```
+
+`transition_ticket()` locked the ticket with `select_for_update()` combined with
+`select_related("project", "reporter", "assignee")`. Because `assignee` is nullable, Django emits a
+**LEFT OUTER JOIN**, and PostgreSQL refuses `FOR UPDATE` on the nullable side of an outer join. On
+SQLite the entire clause is silently ignored, so the local suite was green while **every status
+transition would have returned HTTP 500 in production**.
+
+The fix locks with only the non-nullable relations (`project`, `reporter`), keeping INNER joins and a
+single query; `assignee` is not needed as an object by the transition path (the permission and guard
+checks use `assignee_id`). Recorded here because it is the strongest argument in this repository for
+running the real database in CI: a skipped test is not a passing test.
 
 ## 6. Coverage of the requirements
 
@@ -108,12 +147,12 @@ Errors:   0 (0 unique)
 
 ## 7. Known unverified items (be precise, not optimistic)
 
-| Item | Why it was not verified | How to verify |
+| Item | Why it was not verified here | How to verify |
 | --- | --- | --- |
-| **PostgreSQL-only behaviour**: `SELECT … FOR UPDATE` serialisation, `inet`-backed IP column, expression index behaviour | No PostgreSQL server and no running Docker daemon in this environment | `docker compose up -d db && DB_ENGINE=postgres POSTGRES_HOST=localhost .venv/Scripts/python -m pytest -m postgres -v` |
+| **PostgreSQL-only behaviour** | Verified **in CI**, not on this workstation (no local PostgreSQL) | CI job `Backend tests (PostgreSQL 17)`: 229 passed, 0 skipped; locally `DB_ENGINE=postgres pytest -m postgres` |
 | **Celery against a real broker** | No Redis locally; tests run eager | `docker compose up -d redis && celery -A config worker` then trigger an assignment and watch the task log |
 | **MinIO/S3 storage path** | No MinIO locally | `docker compose up -d minio minio-init` with `STORAGE_BACKEND=s3`, then upload/download an attachment |
-| **`docker compose up` end-to-end** | Docker daemon unavailable | Run it; the file passes `docker compose config` (see the deployment guide) |
+| **`docker compose up` end-to-end** | Docker daemon unavailable on this workstation. CI builds both images and boots the backend container against PostgreSQL, but does not run the full stack | Run it; the file renders (`docker compose config`) and images build (CI) |
 | **Browser rendering / visual QA** | No browser session was driven (headless or manual) | `pnpm dev` + backend, log in with a seeded account, walk the flows below |
 
 ### Frontend verification (what *was* executed)
