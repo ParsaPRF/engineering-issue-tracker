@@ -48,5 +48,14 @@ if [ "${ENABLE_MIGRATIONS:-0}" = "1" ]; then
   python manage.py migrate --noinput
 fi
 
+if [ "${ENSURE_STORAGE_BUCKET:-1}" = "1" ]; then
+  echo "[entrypoint] ensuring the object-storage bucket exists"
+  # Idempotent, and a no-op when STORAGE_BACKEND=local. Failing here (rather than on the first
+  # upload) turns a misconfigured endpoint into a startup error with a clear message.
+  python manage.py ensure_storage_bucket --quiet || {
+    echo "[entrypoint] WARNING: could not verify the storage bucket; uploads may fail" >&2
+  }
+fi
+
 echo "[entrypoint] starting: $*"
 exec "$@"

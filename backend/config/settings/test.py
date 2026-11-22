@@ -38,7 +38,10 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": Path(tempfile.gettempdir()) / "eng_tracker.sqlite3",
+            # Not tempfile.gettempdir(): on this Windows host that call returns the *current working
+            # directory* (it considers the system temp dir unusable here), which scatters test
+            # artefacts into the repository. An explicit, git-ignored path is predictable.
+            "NAME": BASE_DIR / ".pytest-db.sqlite3",
             "OPTIONS": {"timeout": 30},
         }
     }
@@ -52,9 +55,10 @@ CELERY_RESULT_BACKEND = "cache+memory://"
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
-# Filesystem storage in a temporary directory keeps the repository clean.
+# Filesystem storage in a git-ignored directory inside the repository (see the note above about
+# tempfile.gettempdir() on this host). Uploads never touch a real bucket, and CI cleans the checkout.
 STORAGE_BACKEND = "local"
-MEDIA_ROOT = Path(tempfile.gettempdir()) / "eng_tracker_test_media"
+MEDIA_ROOT = BASE_DIR / ".pytest-media"
 
 # Throttling is disabled by default so unrelated tests are not rate limited; the dedicated
 # throttle test re-enables it with a low rate.

@@ -70,7 +70,7 @@ docker compose exec backend python manage.py createsuperuser
 | --- | --- |
 | App (via Nginx) | <http://localhost:8080> |
 | API docs | <http://localhost:8080/api/docs/> |
-| MinIO console | <http://localhost:9001> |
+| S3 endpoint (s3mock) | <http://localhost:9090> |
 
 ## Tests
 
@@ -112,18 +112,19 @@ because files exist** — every row below is a command that was actually execute
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Backend tests (SQLite, local) | `pytest apps tests -q` | **228 passed, 1 skipped** — the skip is the PostgreSQL-only race test |
-| Backend tests (PostgreSQL 17, CI) | `pytest -q -ra` with `DB_ENGINE=postgres` | **229 passed, 0 skipped** — the concurrency test really runs |
+| Backend tests (SQLite, local) | `pytest apps tests -q` | **237 passed, 1 skipped** — the skip is the PostgreSQL-only race test |
+| Backend tests (PostgreSQL 17, CI) | `pytest -q -ra` with `DB_ENGINE=postgres` | **238 passed, 0 skipped** — the concurrency test really runs |
 | Lint | `ruff check apps common config tests` | `All checks passed!` |
 | Django checks | `manage.py check` | `System check identified no issues (0 silenced).` |
 | Migrations | `manage.py makemigrations --check --dry-run` | `No changes detected` |
 | OpenAPI schema | `manage.py spectacular --fail-on-warn` | `Errors: 0`, `Warnings: 0`, 51 paths written to `docs/api/openapi.yaml` |
 | Demo data | `manage.py seed_demo` (twice) | 5 users, 1 project, 4 components, 6 tickets; second run created nothing (idempotent) |
-| HTTP smoke test | real `runserver` + cookie/CSRF session | health ok, login ok, ticket list, transitions, dashboard, audit 403 for non-admin, bad CSRF 403 |
+| Full stack | `docker compose up --build -d` + `scripts/verify_stack.sh` | 7 services healthy; Nginx serves the SPA and proxies the API; `/health/` reports `database ok, redis ok` |
+| Object storage round trip | upload + download through the API | stored under a random key in the S3 bucket, downloaded byte-identically, no public URL exposed |
+| Background work | `docker compose logs worker` | the worker (separate process) consumed the task from Redis: `send_notification ... succeeded: 'sent'`; 25/25 notifications dispatched |
 | Frontend typecheck + build | `pnpm build` in `frontend/` | `tsc --noEmit` clean, `vite build` exit 0 — 149 modules, 540 kB JS (158 kB gzip) |
 | Frontend ↔ API integration | real `runserver` + `vite` dev server | SPA shell 200, CSRF cookie via proxy, login via proxy (`HttpOnly` session), `me` + assignments + choices + transitions fetched, anonymous request → 403 |
-| Container images | GitHub Actions | Both Dockerfiles build; the backend container is started against a real PostgreSQL and its `/health/` returns `ok` |
-| CI pipeline | `.github/workflows/ci.yml` | 4 jobs green: lint/schema/migrations, PostgreSQL test suite, frontend build, Docker builds |
+| CI pipeline | `.github/workflows/ci.yml` | 4 jobs green: lint/schema/migrations, PostgreSQL test suite, frontend build, and the **whole compose stack** verified end to end |
 
 ### Verified end-to-end over real HTTP (the SPA's own path)
 
@@ -139,15 +140,13 @@ because files exist** — every row below is a command that was actually execute
 
 ### Not verified in this environment (stated explicitly, not glossed over)
 
-* **`docker compose up` was never executed end-to-end.** The development machine has the Docker CLI
-  but no running daemon. What *is* verified (in CI): the compose file renders, both images build, and
-  the backend container boots against a real PostgreSQL and answers `/health/` with `ok`. MinIO
-  bucket creation, the Nginx+SPA image in a live stack, and the Celery worker against a live Redis
-  remain unexercised.
-* **Redis/MinIO paths in a running stack**: tests use eager Celery and filesystem storage.
-* **Browser rendering / visual QA**: the SPA was verified as a compiled bundle and through its real
-  network path (above), but no browser session was driven by hand or by a headless runner — layout,
-  drawer behaviour and focus management at real viewport sizes are unrendered.
+* **Browser rendering / visual QA**: the SPA was verified as a compiled bundle, through its real
+  network path (Nginx and the Vite proxy) and by API calls with cookies and CSRF — but no browser was
+  driven by hand or by a headless runner, so layout, drawer behaviour and focus management at real
+  viewport sizes are unrendered.
+* **Object persistence across a container restart**: the shipped S3 implementation (`adobe/s3mock`)
+  keeps objects in memory. Use MinIO, SeaweedFS, Ceph RGW or real S3 — one env var — if attachments
+  must survive `docker compose down`.
 
 See [docs/development/testing-guide.md](docs/development/testing-guide.md) §7 and
 [docs/development/deployment-guide.md](docs/development/deployment-guide.md) §11 for the exact list and

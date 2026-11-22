@@ -1,7 +1,14 @@
 # Development / single-host deployment stack.
 #
-# Services: PostgreSQL, Redis, MinIO (S3-compatible object storage), the Django API behind gunicorn,
+# Services: PostgreSQL, Redis, an S3-compatible object store, the Django API behind gunicorn,
 # a Celery worker, Celery beat, and Nginx serving the built SPA and proxying the API.
+#
+# Object storage: the application speaks plain S3 (django-storages + boto3), so the endpoint is
+# swappable. This file ships **LocalStack** because it is reliably pullable and needs no vendor
+# client image; MinIO, SeaweedFS, Ceph RGW or real AWS S3 all work by pointing
+# ``AWS_S3_ENDPOINT_URL`` at them. The bucket is created by the API container itself
+# (``manage.py ensure_storage_bucket``) instead of a separate init container — one less moving part
+# and one less registry dependency.
 #
 # Usage:
 #   cp .env.example .env      # then set real secrets
@@ -9,26 +16,37 @@
 #   docker compose exec backend python manage.py migrate
 #   docker compose exec backend python manage.py createsuperuser
 #   docker compose exec backend python manage.py seed_demo   # optional demo data
-#
-# NOTE: this file could not be *executed* while building the project (no Docker daemon was available
-# in the development environment). It is validated as YAML and reviewed, but the first real
-# `docker compose up` should be treated as an installation step with its own verification — see
-# docs/development/deployment-guide.md, "Known unverified items".
 
 name: eng-tracker
 
 # Container-internal hostnames override whatever .env says for a laptop.
 x-backend-environment: &backend-environment
   DJANGO_SETTINGS_MODULE: config.settings.production
+  # This stack terminates no TLS itself: Nginx serves plain HTTP on the host port. Production
+  # settings redirect HTTP to HTTPS by default, which would send every request (and the health
+  # check) to a port nothing listens on. Put a TLS terminator in front and remove this override for
+  # a real deployment.
+  SECURE_SSL_REDIRECT: "False"
+  # The shared .env selects SQLite for local development; inside the stack the database is the
+  # `db` service, so the engine must be stated explicitly here. Without this line the containers
+  # happily created a throwaway SQLite file and every "database" assertion about the stack was
+  # really about a local file.
+  DB_ENGINE: postgres
   POSTGRES_HOST: db
   POSTGRES_PORT: "5432"
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1
+  # The stack has a real broker and a worker, so tasks must actually be published to Redis instead
+  # of running inline. The shared .env sets this to True for local development (where no broker
+  # exists); without this override the "async" path would silently degrade to synchronous execution
+  # and the worker would sit idle.
+  CELERY_TASK_ALWAYS_EAGER: "False"
   CACHE_BACKEND: redis
   CACHE_URL: redis://redis:6379/2
   STORAGE_BACKEND: s3
-  AWS_S3_ENDPOINT_URL: http://minio:9000
+  AWS_S3_ENDPOINT_URL: http://objectstorage:9090
   AWS_S3_USE_SSL: "False"
+  AWS_S3_ADDRESSING_STYLE: path
   AWS_S3_REGION_NAME: us-east-1
   COLLECTSTATIC: "0"
 
@@ -48,10 +66,8 @@ x-backend-common: &backend-common
       condition: service_healthy
     redis:
       condition: service_healthy
-    # Not "minio healthy" but "bucket created": uploading to a missing bucket fails at runtime, and
-    # an ordering bug there is invisible until the first file upload.
-    minio-init:
-      condition: service_completed_successfully
+    objectstorage:
+      condition: service_healthy
   restart: unless-stopped
 
 services:
@@ -82,44 +98,28 @@ services:
       retries: 10
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: ["server", "/data", "--console-address", ":9001"]
+  objectstorage:
+    # S3-compatible object storage for the stack. `adobe/s3mock` is used here because it needs no
+    # licence and can pre-create the bucket from an environment variable. The application only ever
+    # speaks plain S3, so MinIO, SeaweedFS, Ceph RGW or real AWS S3 work by changing this image and
+    # AWS_S3_ENDPOINT_URL in x-backend-environment. (MinIO's registry image and LocalStack's
+    # community build were both unavailable/licence-gated in the delivery environment.)
+    image: adobe/s3mock:latest
     environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
-    volumes:
-      - miniodata:/data
+      # Created at container start, so the very first upload cannot fail with NoSuchBucket. The API
+      # additionally runs `manage.py ensure_storage_bucket`, which covers providers that lack this
+      # convenience.
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: ${AWS_STORAGE_BUCKET_NAME:-eng-tracker-attachments}
     ports:
-      # Console only; the S3 API stays on the internal network.
-      - "${MINIO_CONSOLE_PORT_HOST:-9001}:9001"
-    # The official image ships curl; if a future tag does not, swap this for the mc-based probe
-    # documented in the deployment guide.
+      - "${S3_PORT_HOST:-9090}:9090"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      # The image ships wget (verified); `/favicon.ico` answers 200 while the service is ready.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/favicon.ico || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
-      BUCKET: ${AWS_STORAGE_BUCKET_NAME:-eng-tracker-attachments}
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
-      mc mb --ignore-existing local/$$BUCKET &&
-      mc anonymous set none local/$$BUCKET &&
-      echo 'bucket ready (private)'
-      "
-    restart: "no"
 
   backend:
     <<: *backend-common
@@ -135,15 +135,30 @@ services:
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/"]
+      # http.client instead of urllib: it reports the real status code and never follows a redirect,
+      # so a misconfigured redirect shows up as "unhealthy" instead of silently "passing".
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import http.client,sys;
+          c=http.client.HTTPConnection('127.0.0.1',8000,timeout=4);
+          c.request('GET','/health/');
+          sys.exit(0 if c.getresponse().status==200 else 1)
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 5
       start_period: 40s
 
   worker:
     <<: *backend-common
     command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "2"]
+    environment:
+      <<: *backend-environment
+      # Only the API container prepares storage; three containers racing to create the same bucket
+      # produces confusing warnings for no benefit.
+      ENSURE_STORAGE_BUCKET: "0"
     healthcheck:
       test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
       interval: 60s
@@ -154,6 +169,9 @@ services:
   beat:
     <<: *backend-common
     command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+    environment:
+      <<: *backend-environment
+      ENSURE_STORAGE_BUCKET: "0"
 
   web:
     build:
@@ -173,6 +191,6 @@ services:
 volumes:
   pgdata:
   redisdata:
-  miniodata:
+  objectdata:
   static_data:
   media_data:

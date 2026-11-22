@@ -37,14 +37,23 @@ def get_user_by_email(email: str) -> User | None:
 def search_users(query: str = "", *, limit: int = 20) -> QuerySet[User]:
     """Directory search used when adding project members.
 
-    Bounded by ``limit``: an unbounded autocomplete over the user table is both a performance and
-    an enumeration risk.
+    Built from ``User.objects`` directly rather than :func:`active_users`, and this is not an
+    oversight: ``active_users()`` joins the profile with ``select_related``, while ``.only(...)``
+    defers everything outside ``PUBLIC_USER_FIELDS`` — including the profile. Django rejects that
+    combination at query time with
+
+        FieldError: Field User.profile cannot be both deferred and traversed using select_related
+
+    A directory entry needs no profile, so the narrow queryset is both correct and cheaper.
+
+    Bounded by ``limit``: an unbounded autocomplete over the user table is both a performance and an
+    enumeration risk.
     """
-    queryset = active_users().only(*PUBLIC_USER_FIELDS)
+    queryset = User.objects.filter(is_active=True).only(*PUBLIC_USER_FIELDS).order_by("full_name")
     query = (query or "").strip()
     if query:
         queryset = queryset.filter(Q(email__icontains=query) | Q(full_name__icontains=query))
-    return queryset.order_by("full_name")[:limit]
+    return queryset[:limit]
 
 
 def users_by_ids(user_ids) -> QuerySet[User]:

@@ -34,6 +34,11 @@ logs/
 celerybeat-schedule*
 *.log
 
+# ---- Test artefacts (see config/settings/test.py) ----
+.pytest-media/
+.pytest-db.sqlite3
+eng_tracker_test_media/
+
 # ---- Editors / OS ----
 .vscode/
 .idea/

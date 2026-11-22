@@ -188,58 +188,71 @@ jobs:
           find dist -type f \( -name '*.js' -o -name '*.css' \) -exec ls -lh {} +
 
   # ---------------------------------------------------------------------------
-  # Container images
+  # The whole stack, exactly as a developer would run it
   # ---------------------------------------------------------------------------
-  docker:
-    name: Docker images build
+  compose-stack:
+    name: Docker Compose stack
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Validate the compose file (no daemon required)
-        # The compose file references `env_file: .env`, so the render needs that file to exist even
-        # though nothing is started. Creating it from the example is exactly what a developer does,
-        # and it doubles as a check that the example is complete enough to boot the stack.
         run: |
           cp .env.example .env
           docker compose config --quiet
 
-      - name: Build backend image
-        run: docker build -f docker/backend.Dockerfile -t eng-tracker-backend:ci .
-
-      - name: Build frontend image (Nginx + SPA)
-        run: docker build -f docker/frontend.Dockerfile -t eng-tracker-frontend:ci .
-
-      - name: Smoke-test the backend image's health endpoint
-        # The image starts gunicorn against a database it cannot reach, so give it a real one:
-        # this proves the entrypoint, wait-for-db loop and gunicorn wiring work together.
+      - name: Prepare a real .env (production settings reject placeholder secrets)
         run: |
-          docker network create ci-net
-          docker run -d --name ci-db --network ci-net \
-            -e POSTGRES_DB=eng_tracker -e POSTGRES_USER=eng_tracker -e POSTGRES_PASSWORD=postgres \
-            postgres:17-alpine
-          for i in $(seq 1 30); do
-            docker exec ci-db pg_isready -U eng_tracker -d eng_tracker && break
-            sleep 2
-          done
-          docker run -d --name ci-backend --network ci-net \
-            -e DJANGO_SECRET_KEY=ci-only-secret-key-that-is-long-enough-123456 \
-            -e DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost \
-            -e DJANGO_CSRF_TRUSTED_ORIGINS=http://127.0.0.1:8080 \
-            -e POSTGRES_DB=eng_tracker -e POSTGRES_USER=eng_tracker -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_HOST=ci-db -e ENABLE_MIGRATIONS=1 \
-            eng-tracker-backend:ci \
-            gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 1
-          for i in $(seq 1 45); do
-            if docker exec ci-backend curl -fsS http://127.0.0.1:8000/health/ > /tmp/health.json 2>/dev/null; then
-              cat /tmp/health.json; echo; docker logs ci-backend | tail -5; exit 0
+          python3 - <<'PY'
+          import pathlib, secrets
+          path = pathlib.Path(".env")
+          text = path.read_text()
+          text = text.replace(
+              "DJANGO_SECRET_KEY=change-me-to-a-50-char-random-string",
+              "DJANGO_SECRET_KEY=" + secrets.token_urlsafe(48),
+          )
+          text = text.replace("POSTGRES_PASSWORD=change-me", "POSTGRES_PASSWORD=ci-postgres-password")
+          text = text.replace("AWS_SECRET_ACCESS_KEY=change-me", "AWS_SECRET_ACCESS_KEY=ci-s3-secret")
+          path.write_text(text)
+          PY
+
+      - name: Build and start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the API to become healthy
+        run: |
+          for i in $(seq 1 60); do
+            if docker compose ps backend --format json | grep -q '"Health":"healthy"'; then
+              echo "backend is healthy"; exit 0
             fi
-            sleep 2
+            sleep 3
           done
-          echo "::error::backend container never became healthy"
-          docker logs ci-backend
+          docker compose logs backend | tail -50
+          echo "::error::the API container never became healthy"
           exit 1
 
-      - name: Cleanup
+      - name: Migrate and seed demo data
+        run: |
+          docker compose exec -T backend python manage.py migrate --noinput
+          docker compose exec -T backend python manage.py seed_demo
+
+      - name: Verify the stack end to end (Nginx -> API -> PostgreSQL, S3 round trip, security checks)
+        run: bash scripts/verify_stack.sh
+
+      - name: The worker must have consumed a notification task from Redis
+        run: |
+          if docker compose logs worker | grep -q "Task apps.notifications.tasks.send_notification"; then
+            echo "worker consumed the task"
+          else
+            docker compose logs worker | tail -40
+            echo "::error::the worker never received a notification task (async path broken)"
+            exit 1
+          fi
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail 120
+
+      - name: Tear down
         if: always()
-        run: docker rm -f ci-backend ci-db || true; docker network rm ci-net || true
+        run: docker compose down -v

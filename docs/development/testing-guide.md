@@ -61,29 +61,50 @@ The skip hook is deliberate: a test that silently stops testing row locking is w
 
 ## 5. Recorded results
 
-Local run during delivery (2026-11-15, Python 3.14.2, Django 5.2.19, **SQLite**):
+Local run during delivery (2026-11-22, Python 3.14.2, Django 5.2.19, **SQLite**):
 
 ```
 $ .venv/Scripts/python -m pytest apps tests -q
-........................................................................ [ 31%]
-........................................................................ [ 62%]
-........................................................................ [ 94%]
-s............                                                            [100%]
+........................................................................ [ 60%]
+........................................................................ [ 90%]
+.........s............                                                   [100%]
 =========================== short test summary info ===========================
 SKIPPED [1] apps\tickets\tests\test_ticket_keys.py:115: requires PostgreSQL (see ADR-008); run with Docker
-228 passed, 1 skipped in 7.76s
+237 passed, 1 skipped in 8.24s
 ```
 
 Continuous integration run (same commit family, **PostgreSQL 17**, GitHub Actions):
 
 ```
 $ pytest -q --no-header -ra      # DB_ENGINE=postgres
-229 passed in 12.51s
+238 passed
 no skipped tests
 ```
 
 The difference is the point: the concurrency test only exists in the PostgreSQL run, and the CI job
 fails if anything is skipped so it cannot silently disappear.
+
+Full stack run (Docker Compose, `scripts/verify_stack.sh`):
+
+```
+== waiting for http://localhost:8080/health/
+{"status":"ok","checks":{"database":"ok","cache_backend":"redis","redis":"ok"}}
+== SPA shell served by Nginx                          index.html ok
+== CSRF + login                                       logged in as manager@example.com (PROJECT_MANAGER)
+== reads through Nginx (PostgreSQL)                   tickets: 6, first: ENG-6 (IN_PROGRESS)
+== attachment upload -> object storage -> download    stored as upload.txt (30 bytes, sha256 f0eb21983adc...)
+                                                      download matches the upload
+== assignment -> real Celery task via Redis           assigned ENG-6 to Eve Engineer
+== security spot-checks                               anonymous /auth/me/ -> 403, audit as project manager -> 403
+Stack verification passed
+```
+
+Plus, from the worker container log:
+
+```
+Task apps.notifications.tasks.send_notification [...] received
+Task apps.notifications.tasks.send_notification [...] succeeded in 0.035s: 'sent'
+```
 
 Lint:
 
@@ -108,7 +129,25 @@ Errors:   0 (0 unique)
 | Lint, schema, migrations | style, import order, `makemigrations --check`, `manage.py check`, a schema that generates with **zero warnings** |
 | Backend tests (PostgreSQL 17) | the full suite on the production database, with **no skips allowed** |
 | Frontend build | `tsc --noEmit` and `vite build` succeed with a frozen lockfile |
-| Docker images build | both Dockerfiles build, the compose file renders, and the backend container starts against a real PostgreSQL and answers `/health/` with `ok` |
+| Docker Compose stack | the stack really starts: every service healthy, then `scripts/verify_stack.sh` drives Nginx → API → PostgreSQL, uploads and downloads through object storage, assigns a ticket and asserts the **worker** consumed the task from Redis, plus the 403 spot checks |
+
+### The defects that running the stack found
+
+Six problems were invisible to the unit/integration suite and to a SQLite development machine, and
+appeared within minutes of actually starting the containers:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| worker crash-looped with `ModuleNotFoundError: No module named 'packaging'` | `kombu`'s Redis transport imports it but declares it only under an optional extra | pinned in `requirements/base.txt` (activating the extra would have downgraded the Redis client) |
+| `GET /auth/users/directory/` → HTTP 500 | `select_related("profile")` + `.only(...)` → `FieldError: Field User.profile cannot be both deferred and traversed` | narrower queryset in `accounts/selectors/users.py`, plus nine new directory tests |
+| the stack "used PostgreSQL" but was really on SQLite | the shared `.env` sets `DB_ENGINE=sqlite`; compose only overrode `POSTGRES_HOST` | `DB_ENGINE: postgres` in `x-backend-environment` |
+| notifications never reached the worker | `CELERY_TASK_ALWAYS_EAGER=True` leaked from `.env` into the containers | `CELERY_TASK_ALWAYS_EAGER: "False"` in the stack |
+| every `/api/` call → 502 after a backend restart | Nginx resolved `backend` once at startup and kept the stale IP | `resolver 127.0.0.11 valid=10s` + variable `proxy_pass` |
+| backend container permanently `unhealthy` | `SECURE_SSL_REDIRECT=True` answered the probe with `301` to a port nothing listens on | redirect disabled in the stack (plain HTTP) and the probe uses `http.client`, which reports the real status |
+
+The lesson, recorded because it keeps repeating in this project: **a green suite on a different
+database with different services is not evidence about the running system.** Each of the six was a
+one-line fix; finding them required someone to run the thing.
 
 ### The bug CI was built for — and immediately found
 
@@ -149,10 +188,12 @@ running the real database in CI: a skipped test is not a passing test.
 
 | Item | Why it was not verified here | How to verify |
 | --- | --- | --- |
-| **PostgreSQL-only behaviour** | Verified **in CI**, not on this workstation (no local PostgreSQL) | CI job `Backend tests (PostgreSQL 17)`: 229 passed, 0 skipped; locally `DB_ENGINE=postgres pytest -m postgres` |
-| **Celery against a real broker** | No Redis locally; tests run eager | `docker compose up -d redis && celery -A config worker` then trigger an assignment and watch the task log |
-| **MinIO/S3 storage path** | No MinIO locally | `docker compose up -d minio minio-init` with `STORAGE_BACKEND=s3`, then upload/download an attachment |
-| **`docker compose up` end-to-end** | Docker daemon unavailable on this workstation. CI builds both images and boots the backend container against PostgreSQL, but does not run the full stack | Run it; the file renders (`docker compose config`) and images build (CI) |
+| **PostgreSQL-only behaviour** | **Verified** in CI (238 passed, 0 skipped) and by the container stack | CI job `Backend tests (PostgreSQL 17)`; locally `DB_ENGINE=postgres pytest -m postgres` |
+| **Redis / Celery against a real broker** | **Verified** in the container stack: the worker consumed the task and logged `succeeded` | `docker compose up -d`, then `scripts/verify_stack.sh` and `docker compose logs worker` |
+| **S3 object storage path** | **Verified** with upload/download round trip through the shipped S3 mock | as above; object keys and bytes were checked directly against the bucket |
+| **`docker compose up` end-to-end** | **Verified** on Windows and in CI | `docker compose up --build -d && docker compose exec backend python manage.py migrate && docker compose exec backend python manage.py seed_demo && bash scripts/verify_stack.sh` |
+| **Object persistence across a restart** | The shipped S3 mock keeps objects in memory (mounting a volume made it fail to start) | swap in MinIO/SeaweedFS/Ceph/S3 via `AWS_S3_ENDPOINT_URL` |
+| **TLS termination** | The stack serves plain HTTP | put a TLS terminator in front and remove the `SECURE_SSL_REDIRECT` override |
 | **Browser rendering / visual QA** | No browser session was driven (headless or manual) | `pnpm dev` + backend, log in with a seeded account, walk the flows below |
 
 ### Frontend verification (what *was* executed)

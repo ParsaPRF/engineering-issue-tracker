@@ -19,10 +19,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# libpq is needed by psycopg at runtime; curl is used by the compose healthcheck.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 curl \
-    && rm -rf /var/lib/apt/lists/*
+# No system packages are installed on purpose. ``psycopg[binary]`` ships a self-contained libpq, and
+# the health check below uses the interpreter that is already in the image, so the build needs no
+# Debian repository access at all: fewer moving parts, a smaller image, and a build that cannot fail
+# because a mirror is slow.
 
 COPY backend/requirements /app/requirements
 RUN pip install --upgrade pip && pip install -r requirements/production.txt
@@ -40,7 +40,7 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/health/ || exit 1
+    CMD python -c "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=4); c.request('GET','/health/'); sys.exit(0 if c.getresponse().status == 200 else 1)"
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "60", "--access-logfile", "-"]

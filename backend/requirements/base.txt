@@ -18,6 +18,12 @@ django-environ==0.14.0            # 12-factor configuration from environment var
 psycopg[binary]==3.3.9            # PostgreSQL driver (binary wheel: no local libpq needed)
 celery==5.7.0                     # asynchronous notification dispatch (ADR-009)
 redis==8.1.0                      # Celery broker / cache client
+packaging==26.3                   # runtime import of kombu.transport.redis
+                                  #   kombu declares it only as an extra ("redis"), and activating
+                                  #   that extra pins redis<6, which conflicts with the client we
+                                  #   want. Importing the transport without it crashes the worker with
+                                  #   ModuleNotFoundError — found by actually starting the worker in
+                                  #   the container stack, not by the test suite.
 django-storages==1.14.6           # S3-compatible storage backend for attachments
 boto3==1.44.3                     # MinIO/S3 client used by django-storages
 tzdata==2026.6                    # IANA time zone database; required by zoneinfo on Windows

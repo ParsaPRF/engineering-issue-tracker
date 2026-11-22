@@ -9,7 +9,7 @@ Internet → TLS termination → Nginx (port 80/443)
                                ├── /static/              → Django static (admin, API docs UI)
                                ├── /media/               → public media only
                                ├── /api/, /admin/, /health/ → gunicorn → Django
-                               └── (internal) PostgreSQL, Redis, MinIO, Celery worker, Celery beat
+                               └── (internal) PostgreSQL, Redis, S3-compatible storage, Celery worker, Celery beat
 ```
 
 One origin for the SPA and the API is deliberate: session cookies and CSRF behave exactly as Django
@@ -22,12 +22,33 @@ download endpoint (ADR-010).
 | --- | --- | --- | --- |
 | `db` | `postgres:17-alpine` | Data store | `pg_isready` |
 | `redis` | `redis:7-alpine` | Broker, result backend, cache | `redis-cli ping` |
-| `minio` | `minio/minio` | S3-compatible object storage (console on :9001) | `GET /minio/health/live` |
-| `minio-init` | `minio/mc` | Creates the private bucket once | exits 0 |
-| `backend` | built from `docker/backend.Dockerfile` | gunicorn + Django | `GET /health/` |
+| `objectstorage` | `adobe/s3mock` | S3-compatible object storage (API on :9090) | `wget /favicon.ico` |
+| `backend` | built from `docker/backend.Dockerfile` | gunicorn + Django | `GET /health/` (python probe) |
 | `worker` | same image | Celery worker | `celery inspect ping` |
 | `beat` | same image | Periodic retry of unsent notifications | — |
 | `web` | built from `docker/frontend.Dockerfile` | Nginx + SPA | `GET /` |
+
+There is no bucket-init container: the API creates the bucket itself on startup
+(`manage.py ensure_storage_bucket`, idempotent, with a grace period for the storage service to come
+up). One less image, one less registry dependency, and the same command works against any provider.
+
+### Object storage is swappable
+
+The application only speaks plain S3 (`django-storages` + `boto3`), so `objectstorage` is a
+convenience image, not a lock-in. The shipped `adobe/s3mock` was chosen because it needs no licence
+and can pre-create the bucket; the MinIO image was not pullable in the delivery registry and the
+LocalStack community build now demands an auth token. To use MinIO, SeaweedFS, Ceph RGW or real AWS
+S3, change two things in `docker-compose.yml`:
+
+1. the `objectstorage` image (and its health check),
+2. `AWS_S3_ENDPOINT_URL` in `x-backend-environment` (plus credentials in `.env` if the provider needs
+   them).
+
+Keep `AWS_S3_ADDRESSING_STYLE=path` for self-hosted implementations. Nothing in the application code
+changes — attachments are still served only through the authorising download endpoint (ADR-010).
+
+Note that `adobe/s3mock` keeps objects in memory: attachments do not survive `docker compose down`.
+Use a persistent implementation for anything you care about.
 
 ## 3. First deployment
 
@@ -74,6 +95,12 @@ curl -fsS http://localhost:8080/api/schema/ >/dev/null   # schema served
 | `SECURE_CONTENT_TYPE_NOSNIFF` / `X_FRAME_OPTIONS=DENY` | on | basic browser hardening |
 | `DEBUG` | `False` | no stack traces to clients |
 
+The shipped compose stack sets `SECURE_SSL_REDIRECT=False` for itself: it serves plain HTTP on the
+host port and expects a TLS terminator in front (Nginx with certificates, a load balancer, or
+Cloudflare). Remove that override once TLS terminates at the edge and forwards `X-Forwarded-Proto`.
+Leaving the redirect on without a TLS listener is what makes an otherwise healthy container report
+`unhealthy`, because the health probe is answered with `301`.
+
 Behind Nginx the container's own TLS is not used; terminate TLS at your edge (Nginx, a load balancer,
 or Cloudflare). Nginx forwards `X-Forwarded-Proto`.
 
@@ -104,12 +131,15 @@ Notifications are safe under retries: `Notification.dedup_key` is unique and the
 # PostgreSQL
 docker compose exec -T db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip > backup-$(date +%F).sql.gz
 
-# Object storage (attachments are ext4 files inside MinIO's volume)
-docker run --rm -v eng-tracker_miniodata:/data -v "$PWD":/backup alpine \
-  tar czf /backup/minio-$(date +%F).tar.gz -C /data .
+# Object storage: back up the provider's volume, not the mock's memory.
+#   MinIO      : tar the volume that holds /data
+#   SeaweedFS  : tar the volume behind -dir
+#   s3mock     : keep nothing (in-memory); do not run it in production
+docker run --rm -v eng-tracker_objectdata:/data -v "$PWD":/backup alpine \
+  tar czf /backup/objects-$(date +%F).tar.gz -C /data .
 
 # Restore (PostgreSQL)
-gunzip -c backup-2026-11-15.sql.gz | docker compose exec -T db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+gunzip -c backup-2026-11-22.sql.gz | docker compose exec -T db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
 ```
 
 The two backups **must be taken together**: an attachment row without its object (or vice versa) is a
@@ -161,12 +191,13 @@ docker compose exec backend python manage.py check --deploy
 
 | Item | Status |
 | --- | --- |
-| `docker compose up` executed end-to-end | **Not executed on the delivery workstation** (no Docker daemon). CI does build both images, render the compose file, and boot the backend container against a real PostgreSQL with a green `/health/`. |
-| MinIO bucket creation (`minio-init`) | Not executed; script reviewed. Covered by the manual checklist. |
-| MinIO healthcheck using `curl` | Standard for the official image, but not verified against a pulled tag here. If a tag lacks `curl`, replace with the `mc ready local` probe. |
-| Nginx + built SPA served together | The SPA image builds in CI; serving it behind Nginx in a live stack is unexercised. |
-| PostgreSQL-only behaviour | **Verified**: CI runs the full suite on PostgreSQL 17 (229 passed, 0 skipped). It also caught a real `FOR UPDATE` + nullable-join bug — see the testing guide. |
-| Redis / Celery against a real broker | Not verified; tests run eager. |
+| `docker compose up` executed end-to-end | **Verified** on Windows/Docker Desktop and in CI: 7 services healthy, `scripts/verify_stack.sh` passes (Nginx → API → PostgreSQL, S3 round trip, real Celery task, security checks). |
+| Nginx + built SPA served together | **Verified**: the SPA shell is served by Nginx and every `/api/` call is proxied on the same origin. |
+| PostgreSQL-only behaviour | **Verified**: CI runs the full suite on PostgreSQL 17 (238 passed, 0 skipped). |
+| Redis / Celery against a real broker | **Verified**: the worker (separate container) logs the notification task as received and `succeeded`, and the notifications table shows 25/25 dispatched. |
+| Object storage persistence | **Not covered**: the shipped `adobe/s3mock` keeps objects in memory (it failed to start with a mounted volume). Use MinIO/SeaweedFS/Ceph/S3 for durable storage. |
+| TLS termination | **Not exercised**: the stack serves plain HTTP; TLS is expected from an edge proxy. |
+| MinIO image availability | The `minio/minio` image was not pullable in the delivery registry, and LocalStack's community build now requires an auth token; hence `adobe/s3mock` as the shipped default. |
 
 Treat the first `docker compose up` as an installation step with its own verification pass against
 the checklist above — not as something this document can promise on its behalf.

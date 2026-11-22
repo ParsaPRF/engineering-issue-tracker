@@ -4,6 +4,66 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-11-22
+
+Verifying the stack by actually running it found six defects that the test suite and the SQLite
+development environment could not see. This release fixes all of them and turns the manual check into
+a script that CI runs on every push.
+
+### Fixed
+
+- **The worker could not start at all.** `kombu`'s Redis transport imports `packaging`, but only
+  declares it under an optional extra, so the container image was missing it:
+  `ModuleNotFoundError: No module named 'packaging'`. The dependency is now pinned explicitly in
+  `requirements/base.txt` (activating kombu's own `redis` extra would have downgraded the Redis
+  client below the version this project pins).
+- **`GET /auth/users/directory/` returned HTTP 500.** The selector combined
+  `select_related("profile")` with `.only(*PUBLIC_USER_FIELDS)`, which Django rejects with
+  `FieldError: Field User.profile cannot be both deferred and traversed using select_related`. The
+  endpoint is what the UI uses to add project members, and no test covered it — nine directory tests
+  now do.
+- **The container stack silently used SQLite.** The shared `.env` selects SQLite for local
+  development, and the stack only overrode `POSTGRES_HOST`, so every "database" claim about the
+  running stack was really about a throwaway file. The compose file now sets `DB_ENGINE=postgres`.
+- **Celery ran inline inside the stack**, because `CELERY_TASK_ALWAYS_EAGER=True` (a local-development
+  setting) leaked into the containers. The compose file now sets it to `False`, so tasks are
+  published to Redis and consumed by the worker.
+- **Every `/api/` call returned 502 after a backend restart.** Nginx resolved `backend` once at
+  startup via a static `upstream` block and kept the stale IP. It now resolves per request through
+  Docker's DNS (`resolver 127.0.0.1 valid=10s` + a variable `proxy_pass`).
+- **The health check could never pass behind the production settings**, because
+  `SECURE_SSL_REDIRECT=True` answered `301` and the probe followed the redirect to a port nothing
+  listened on. The stack disables the redirect (it serves plain HTTP; put a TLS terminator in front
+  for a real deployment) and the probe now uses `http.client`, which reports the real status.
+
+### Changed
+
+- **Object storage is provider-agnostic and needs no licence or vendor client.** The compose stack
+  uses `adobe/s3mock`, the bucket is created by the application itself
+  (`manage.py ensure_storage_bucket`, idempotent, with a startup grace period) instead of a separate
+  `mc` init container, and `AWS_S3_ADDRESSING_STYLE=path` is set for self-hosted endpoints. MinIO,
+  SeaweedFS, Ceph RGW and real AWS S3 work by pointing `AWS_S3_ENDPOINT_URL` at them.
+- **The backend image installs no system packages.** `psycopg[binary]` ships its own libpq and the
+  health check uses the image's own interpreter, so the build needs no Debian mirror at all.
+- **A single `.env` now serves both a local run and the container stack**, and `.env.example` is the
+  complete template for both.
+- `scripts/verify_stack.sh` exercises the running stack end to end (Nginx → API → PostgreSQL, S3 round
+  trip, assignment, realworker task, security spot checks) and is wired into CI as the `compose-stack`
+  job, replacing the previous image-only smoke test.
+
+### Verified
+
+- 237 tests pass locally on SQLite (1 PostgreSQL-only test skipped by design); the PostgreSQL CI job
+  runs 238 with **no skips**.
+- The full stack was brought up with `docker compose up --build -d` and verified through Nginx:
+  `/health/` reports `database ok, redis ok`; login, ticket reads, transition catalogue, dashboard and
+  assignment work; an attachment uploaded through the API is stored in the S3 bucket under a random
+  key and downloads back byte-identically; the Celery worker (a separate process) logs
+  `Task apps.notifications.tasks.send_notification ... succeeded: 'sent'` with 25/25 notifications
+  dispatched; anonymous requests get 403 and the audit endpoint refuses a project manager.
+- Not verified: browser rendering/visual QA (no headless run), and object persistence across a
+  container restart with the in-memory S3 mock (use MinIO or another real implementation for that).
+
 ## [1.0.0] — 2026-11-15
 
 First complete delivery of the Engineering Issue & Ticket Tracking System: a modular-monolith
@@ -105,3 +165,4 @@ the decisions behind them.
 - Browser rendering was not visually verified; the bundle and its network path were.
 
 [1.0.0]: https://github.com/ParsaPRF/engineering-issue-tracker/releases/tag/v1.0.0
+[1.0.1]: https://github.com/ParsaPRF/engineering-issue-tracker/releases/tag/v1.0.1

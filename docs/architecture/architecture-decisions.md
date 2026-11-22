@@ -177,12 +177,17 @@ a `dedup_key` must be derived for every event type.
 
 **Context.** Attachments can contain customer data, logs or credentials.
 
-**Decision.** Files are stored via `django-storages` (MinIO/S3 in Docker, filesystem in local
-dev) under a random UUID object name that never contains the original filename. The bucket is
-private; no public URL is ever returned by the API. Download goes through
+**Decision.** Files are stored via `django-storages` (any S3-compatible endpoint: MinIO, SeaweedFS,
+Ceph RGW, s3mock, or real AWS S3) under a random UUID object name that never contains the original
+filename. The bucket is private; no public URL is ever returned by the API. Download goes through
 `GET /api/v1/attachments/<uuid>/download/`, which re-checks project membership and permission
 and then streams the object. Upload enforces an extension+content-type allow-list and a size
 limit (`ATTACHMENT_MAX_BYTES`), and stores a SHA-256 checksum.
+
+The provider is deliberately **not** part of the application: only `AWS_S3_ENDPOINT_URL` and the
+credentials change. The bucket is created by the application itself
+(`manage.py ensure_storage_bucket`, idempotent, with a startup grace period) rather than by a vendor
+init container, so the stack has no dependency on a specific storage vendor's tooling.
 
 **Consequences.** Object-level authorisation is enforced on every read, matching the
 "no insecure direct object reference" requirement. Cost: downloads consume application

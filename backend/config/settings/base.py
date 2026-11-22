@@ -184,6 +184,9 @@ if STORAGE_BACKEND == "s3":
     AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default="")
     AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="us-east-1")
     AWS_S3_USE_SSL = env.bool("AWS_S3_USE_SSL", default=True)
+    # Path-style addressing is what every self-hosted S3 implementation (MinIO, SeaweedFS,
+    # LocalStack, s3mock, Ceph RGW) expects, and it is the safe default for a custom endpoint.
+    AWS_S3_ADDRESSING_STYLE = env("AWS_S3_ADDRESSING_STYLE", default="path")
     AWS_QUERYSTRING_AUTH = False
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
