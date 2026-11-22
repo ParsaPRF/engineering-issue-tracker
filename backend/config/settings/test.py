@@ -13,11 +13,8 @@ systems — while still being able to run against **PostgreSQL** when the enviro
 * Attachments are written to a throwaway directory, never to a real bucket.
 """
 
-import tempfile
-from pathlib import Path
-
 from .base import *  # noqa: F401,F403
-from .base import REST_FRAMEWORK, env
+from .base import BASE_DIR, REST_FRAMEWORK, env
 
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost", "127.0.0.1"]
