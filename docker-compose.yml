@@ -172,6 +172,12 @@ services:
     environment:
       <<: *backend-environment
       ENSURE_STORAGE_BUCKET: "0"
+    healthcheck:
+      # The image's HEALTHCHECK probes gunicorn on :8000, which only the `backend` container runs.
+      # Inheriting it made `beat` report `unhealthy` forever, which trains people to ignore the status
+      # column. Beat exposes no health endpoint, so the honest answer is "no health check" rather
+      # than a green light that means nothing.
+      disable: true
 
   web:
     build:

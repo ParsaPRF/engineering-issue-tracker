@@ -236,6 +236,18 @@ jobs:
           docker compose exec -T backend python manage.py migrate --noinput
           docker compose exec -T backend python manage.py seed_demo
 
+      - name: No service may be unhealthy or restarting
+        # An inherited image HEALTHCHECK made `beat` report "unhealthy" forever while everything
+        # worked; a status column nobody can trust is worse than none. This assertion keeps the
+        # stack's own health reporting honest.
+        run: |
+          docker compose ps --format '{{.Service}} {{.Status}}'
+          if docker compose ps --format '{{.Service}} {{.Status}}' | grep -Ei 'unhealthy|restarting|exited'; then
+            echo "::error::a compose service is unhealthy, restarting or exited"
+            docker compose ps
+            exit 1
+          fi
+
       - name: Verify the stack end to end (Nginx -> API -> PostgreSQL, S3 round trip, security checks)
         run: bash scripts/verify_stack.sh
 
