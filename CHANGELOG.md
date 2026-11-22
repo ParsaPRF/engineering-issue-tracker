@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-11-22
+
+### Fixed
+
+- **`beat` reported a meaningless `unhealthy` status.** The container inherited the image-level
+  `HEALTHCHECK`, which probes gunicorn on `:8000` — a process only the `backend` service runs. A
+  status column that is permanently red for a service that works is worse than no status at all, so
+  the check is now explicitly disabled for `beat` (it exposes no health endpoint).
+
+### Added
+
+- CI asserts that **no compose service is `unhealthy`, `restarting` or `exited`** before the
+  end-to-end script runs, so "the status column lies" fails the build instead of being discovered
+  months later.
+
 ## [1.0.1] — 2026-11-22
 
 Verifying the stack by actually running it found six defects that the test suite and the SQLite
@@ -166,3 +181,4 @@ the decisions behind them.
 
 [1.0.0]: https://github.com/ParsaPRF/engineering-issue-tracker/releases/tag/v1.0.0
 [1.0.1]: https://github.com/ParsaPRF/engineering-issue-tracker/releases/tag/v1.0.1
+[1.0.2]: https://github.com/ParsaPRF/engineering-issue-tracker/releases/tag/v1.0.2
