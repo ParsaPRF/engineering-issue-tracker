@@ -175,7 +175,8 @@ def table(slide, rows, left, top, width, col_widths, header_row=True, size=12, r
 
 prs = new_deck()
 TOTAL = 14
-index = 0
+# The title slide counts as 1 even though it has no footer, otherwise every page number is off by one.
+index = 1
 
 
 def next_slide(kicker: str, title: str):
